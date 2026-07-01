@@ -1,0 +1,63 @@
+\begin{thebibliography}{}
+
+\bibitem[Burt, 1992]{Burt1992}
+Burt, R.~S. (1992).
+\newblock {\em Structural Holes: The Social Structure of Competition}.
+\newblock Harvard University Press, Cambridge, MA.
+
+\bibitem[Butts, 2008]{Butts2008}
+Butts, C.~T. (2008).
+\newblock Social network analysis with {sna}.
+\newblock {\em Journal of Statistical Software}, 24(6):1--51.
+
+\bibitem[Csardi and Nepusz, 2006]{Csardi2006}
+Csardi, G. and Nepusz, T. (2006).
+\newblock The {igraph} software package for complex network research.
+\newblock In {\em InterJournal, Complex Systems}, page 1695.
+
+\bibitem[Huisman, 2009]{Huisman2009}
+Huisman, M. (2009).
+\newblock Imputation of missing network data: Some simple procedures.
+\newblock {\em Journal of Social Structure}, 10(1):1--29.
+
+\bibitem[Krackhardt, 1988]{Krackhardt1988}
+Krackhardt, D. (1988).
+\newblock Predicting with networks: Nonparametric multiple regression analysis of dyadic data.
+\newblock {\em Social Networks}, 10(4):359--381.
+
+\bibitem[Krause et~al., 2020]{Krause2020}
+Krause, R.~W., Huisman, M., Steglich, C., and Snijders, T. A.~B. (2020).
+\newblock Missing data in cross-sectional networks -- {A}n extensive comparison of missing data treatment methods.
+\newblock {\em Social Networks}, 62:99--112.
+
+\bibitem[Little and Rubin, 2002]{LittleRubin2002}
+Little, R. J.~A. and Rubin, D.~B. (2002).
+\newblock {\em Statistical Analysis with Missing Data}.
+\newblock Wiley, Hoboken, NJ, 2nd edition.
+
+\bibitem[Opsahl and Panzarasa, 2009]{OpsahlPanzarasa2009}
+Opsahl, T. and Panzarasa, P. (2009).
+\newblock Clustering in weighted networks.
+\newblock {\em Social Networks}, 31(2):155--163.
+
+\bibitem[Robins et~al., 2007]{Robins2007}
+Robins, G., Pattison, P., Kalish, Y., and Lusher, D. (2007).
+\newblock An introduction to exponential random graph ({p*}) models for social networks.
+\newblock {\em Social Networks}, 29(2):173--191.
+
+\bibitem[Rubin, 1987]{Rubin1987}
+Rubin, D.~B. (1987).
+\newblock {\em Multiple Imputation for Nonresponse in Surveys}.
+\newblock Wiley, New York.
+
+\bibitem[{van Buuren} and Groothuis-Oudshoorn, 2011]{vanBuuren2011}
+{van Buuren}, S. and Groothuis-Oudshoorn, K. (2011).
+\newblock {mice}: Multivariate imputation by chained equations in {R}.
+\newblock {\em Journal of Statistical Software}, 45(3):1--67.
+
+\bibitem[Venables and Ripley, 2002]{Venables2002}
+Venables, W.~N. and Ripley, B.~D. (2002).
+\newblock {\em Modern Applied Statistics with S}.
+\newblock Springer, New York, 4th edition.
+
+\end{thebibliography}

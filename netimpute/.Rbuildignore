@@ -1,0 +1,5 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^dev$
+^paper$
+^LICENSE\.md$

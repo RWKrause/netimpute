@@ -1,0 +1,38 @@
+Package: netimpute
+Type: Package
+Title: Node-Level Network Measures as Predictors for Multiple Imputation
+Version: 0.1.0
+Authors@R: c(
+    person(
+      "Jane", "Doe",
+      email = "jane@example.com",
+      role = c("aut", "cre")
+    )
+  )
+Description: Computes node-level social network measures (degree, reciprocity,
+    centrality, brokerage, closure, and attribute-scale-appropriate homophily
+    measures) across one or more networks sharing a common attribute schema,
+    and reduces them to principal components usable as auxiliary predictors
+    in a multiple-imputation model (e.g. mice with predictive mean matching),
+    while optionally preserving specific raw measures un-transformed when
+    they are themselves part of a substantive hypothesis. Also provides a
+    dyadic (cell-level) regression for network ties - an MR-QAP-style model
+    without the permutation test, since the goal is prediction rather than
+    inference - and a mice-style chained-equations routine, netmice(), that
+    jointly imputes missing nodal attributes and missing network ties.
+License: GPL (>= 3)
+Encoding: UTF-8
+LazyData: true
+Imports:
+    igraph,
+    mice,
+    graphics,
+    grDevices
+Suggests:
+    sna,
+    network,
+    future,
+    nnet,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+Config/roxygen2/version: 8.0.0
