@@ -77,19 +77,22 @@ net_measures_full <- function(net, attributes, attr_types = NULL, id_col = NULL,
     nonreciprocal_degree  = recip$nonreciprocal_degree,
     reciprocity_ratio     = recip$reciprocity_ratio,
     weighted_degree       = igraph::strength(g, mode = "all"),
-    eigenvector           = igraph::eigen_centrality(g, directed = directed)$vector,
+    eigenvector           = igraph::eigen_centrality(
+      g, directed = directed)$vector,
     bonacich_power        = .bonacich_power(g),
     alpha_centrality      = tryCatch(
       as.numeric(igraph::alpha_centrality(g, alpha = alpha_exp)),
       error = function(e) rep(NA_real_, n)
     ),
     pagerank              = igraph::page_rank(g, directed = directed)$vector,
-    betweenness           = igraph::betweenness(g, directed = directed, normalized = TRUE),
+    betweenness           = igraph::betweenness(
+      g, directed = directed, normalized = TRUE),
     closeness             = tryCatch(
       as.numeric(igraph::closeness(g, mode = "all", normalized = TRUE)),
       error = function(e) rep(NA_real_, n)
     ),
-    harmonic_closeness    = igraph::harmonic_centrality(g, mode = "all", normalized = TRUE),
+    harmonic_closeness    = igraph::harmonic_centrality(
+      g, mode = "all", normalized = TRUE),
     constraint            = as.numeric(igraph::constraint(g)),
     effective_size        = holes$effective_size,
     efficiency            = holes$efficiency,

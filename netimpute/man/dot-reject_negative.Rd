@@ -12,7 +12,6 @@ networks only. Signed networks (negative tie values) are not yet
 supported - several measures (e.g. path-based centrality, which requires
 non-negative edge costs; the weighted transitivity/reciprocity formulas
 below, which assume weights are magnitudes) are not well-defined or not
-implemented for them. This is checked as early as possible so the failure
-is a clear, immediate error rather than a confusing downstream one.
+implemented for them.
 }
 \keyword{internal}

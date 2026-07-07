@@ -5,7 +5,7 @@
 \title{E-I index per node: (external - internal ties) / total ties
 Negative = homophilous (mostly ties to same category), positive = heterophilous.}
 \usage{
-.ei_index(g, x)
+.ei_index(g, x, nb_all = NULL)
 }
 \description{
 E-I index per node: (external - internal ties) / total ties

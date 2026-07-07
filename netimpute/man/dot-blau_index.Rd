@@ -4,7 +4,7 @@
 \alias{.blau_index}
 \title{Blau's index of heterogeneity of alters' attribute values: 1 - sum(p_k^2)}
 \usage{
-.blau_index(g, x)
+.blau_index(g, x, nb_all = NULL)
 }
 \description{
 Blau's index of heterogeneity of alters' attribute values: 1 - sum(p_k^2)

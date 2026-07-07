@@ -15,6 +15,6 @@ i); the numerator is the same sum restricted to pairs where the triangle
 is actually closed (j and k are themselves tied). The ratio reduces to the
 ordinary (binary) local clustering coefficient when all weights are 1.
 Direction is collapsed first (mean of the two directed weights) since
-clustering is inherently an undirected-triad concept here.
+clustering is an undirected-triad concept here.
 }
 \keyword{internal}

@@ -57,11 +57,13 @@ test_that(".alter_continuous_stats matches a hand-built directed reference via t
     in_alters  <- el[el[, 2] == i, 1]
     all_alters <- c(out_alters, in_alters)  # each incident directed edge once
     c(
-      diff_out   = if (length(out_alters)) mean(abs(x[i] - x[out_alters])) else NA_real_,
-      diff_in    = if (length(in_alters))  mean(abs(x[i] - x[in_alters]))  else NA_real_,
-      alter_mean = if (length(all_alters)) mean(x[all_alters]) else NA_real_,
-      alter_min  = if (length(all_alters)) min(x[all_alters])  else NA_real_,
-      alter_max  = if (length(all_alters)) max(x[all_alters])  else NA_real_
+      diff_out       = if (length(out_alters)) mean(abs(x[i] - x[out_alters])) else NA_real_,
+      diff_in        = if (length(in_alters))  mean(abs(x[i] - x[in_alters]))  else NA_real_,
+      alter_mean     = if (length(all_alters)) mean(x[all_alters]) else NA_real_,
+      alter_mean_in  = if (length(in_alters))  mean(x[in_alters])  else NA_real_,
+      alter_mean_out = if (length(out_alters)) mean(x[out_alters]) else NA_real_,
+      alter_min      = if (length(all_alters)) min(x[all_alters])  else NA_real_,
+      alter_max      = if (length(all_alters)) max(x[all_alters])  else NA_real_
     )
   })
   ref <- as.data.frame(do.call(rbind, ref))
@@ -71,14 +73,17 @@ test_that(".alter_continuous_stats matches a hand-built directed reference via t
 
   # And confirm node 1's values by direct hand computation, independent of
   # the edge-list reference above:
-  # out-neighbours of 1: {2, 3} -> mean(|10-14|, |10-20|) = mean(4, 10) = 7
-  # in-neighbours of 1: {2}     -> |10-14| = 4
+  # out-neighbours of 1: {2, 3} -> mean(|10-14|, |10-20|) = mean(4, 10) = 7;
+  #                                alter mean = mean(14, 20) = 17
+  # in-neighbours of 1: {2}     -> |10-14| = 4; alter mean = 14
   # all incident neighbours of 1 (edge-counted, node 2 appears twice since
   # it is both an out- and an in-neighbour): {2, 3, 2} -> x = 14, 20, 14 ->
   # mean 16, min 14, max 20
   expect_equal(out$diff_out[1], 7)
   expect_equal(out$diff_in[1], 4)
   expect_equal(out$alter_mean[1], 16)
+  expect_equal(out$alter_mean_in[1], 14)
+  expect_equal(out$alter_mean_out[1], 17)
   expect_equal(out$alter_min[1], 14)
   expect_equal(out$alter_max[1], 20)
 })
@@ -100,6 +105,7 @@ test_that(".homophily_block: dispatches continuous vs categorical columns correc
 
   out <- suppressMessages(.homophily_block(g, attrs, attr_types = NULL))
   expect_true(all(c("age_diff_out", "age_diff_in", "age_alter_mean",
+                     "age_alter_mean_in", "age_alter_mean_out",
                      "age_alter_min", "age_alter_max") %in% names(out)))
   expect_true(all(c("grp_ei_index", "grp_blau_index", "grp_alter_mode") %in% names(out)))
   expect_false(any(grepl("^age_ei_index|^grp_diff_out", names(out))))

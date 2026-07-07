@@ -95,7 +95,16 @@ whose order is randomized independently for each of the `m` imputation
 chains (see Details). Each attribute is imputed conditional on the other
 attributes and on network-derived predictors from whichever networks were
 most recently updated (via \code{\link{net_measures_core}}/
-\code{\link{net_measures_full}}); each network's missing ties are imputed
+\code{\link{net_measures_full}}) - including the alter-composition
+homophily measures of the target attribute itself (e.g. the mean of the
+attribute among a node's alters, overall and over incoming/outgoing ties
+separately), which are functions of other nodes' values and typically
+among the strongest predictors under homophily or social influence. Only
+the target's homophily measures that are direct functions of ego's own
+value (its E-I index and average-absolute-difference terms) are withheld
+when imputing that attribute, since regressing a variable on a transform
+of itself would anchor imputations to their own previous draws. Each
+network's missing ties are imputed
 conditional on whichever attributes and other networks were most recently
 updated (via \code{\link{dyad_regression}}'s predictor set). Only
 predictive mean matching is implemented for now (`method = "pmm"`);

@@ -6,7 +6,8 @@
 using the measure appropriate to that attribute's declared/inferred scale:
  - binary / multinomial -> E-I index, Blau's index, modal alter category
  - continuous           -> avg |diff| on outgoing ties, on incoming ties,
-                            and mean/min/max of alters' values}
+                            mean/min/max of alters' values, and the alter
+                            mean over incoming and outgoing ties separately}
 \usage{
 .homophily_block(g, attributes, attr_types = NULL)
 }
@@ -22,6 +23,7 @@ Build the homophily/alter-similarity block for every attribute column,
 using the measure appropriate to that attribute's declared/inferred scale:
  - binary / multinomial -> E-I index, Blau's index, modal alter category
  - continuous           -> avg |diff| on outgoing ties, on incoming ties,
-                            and mean/min/max of alters' values
+                            mean/min/max of alters' values, and the alter
+                            mean over incoming and outgoing ties separately
 }
 \keyword{internal}

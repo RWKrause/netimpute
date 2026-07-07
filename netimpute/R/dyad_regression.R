@@ -12,10 +12,10 @@
 #' @keywords internal
 .as_matrix_generic <- function(net) {
   if (is.matrix(net)) {
-    .reject_negative(net)  # .reject_negative() already ignores NA (unknown ties)
+    .reject_negative(net)
     return(net)
   }
-  g <- .as_igraph(net)  # already validates non-negativity
+  g <- .as_igraph(net)
   as.matrix(igraph::as_adjacency_matrix(
     g, sparse = FALSE,
     attr = if ("weight" %in% igraph::edge_attr_names(g)) "weight" else NULL
@@ -33,14 +33,18 @@
 #' @param n_components number of PCA components to retain when
 #'   `other_net_predictors = "pca"`
 #' @keywords internal
-.build_dyad_data <- function(mats, attributes, target_idx, attr_types = NULL,
-                              other_net_predictors = c("raw", "pca"),
-                              n_components = 3) {
+.build_dyad_data <- function(mats,
+                             attributes,
+                             target_idx,
+                             attr_types = NULL,
+                             other_net_predictors = c("raw", "pca"),
+                             n_components = 3) {
   other_net_predictors <- match.arg(other_net_predictors)
   net_names <- names(mats)
   n <- nrow(mats[[1]])
   if (!all(vapply(mats, nrow, integer(1)) == n) || !all(vapply(mats, ncol, integer(1)) == n)) {
-    stop("All networks in the list must be square matrices of the same size.", call. = FALSE)
+    stop("All networks in the list must be square matrices of the same size.",
+         call. = FALSE)
   }
 
   target_mat <- mats[[target_idx]]
@@ -62,26 +66,21 @@
     type <- types[[nm]]
     if (type == "continuous") {
       x <- as.numeric(x)
-      ego   <- matrix(x, n, n)[keep]
-      alter <- matrix(x, n, n, byrow = TRUE)[keep]
-      # NOTE: we use |ego - alter|, not the signed difference. The signed
-      # difference (ego - alter) is an exact linear combination of the ego
-      # and alter columns already in the model, which would make the design
-      # matrix singular. The absolute difference is the standard homophily
-      # term in dyadic/QAP models precisely because it is *not* redundant
-      # with the two level terms.
+      ego   <- x[base$i]
+      alter <- x[base$j]
       attr_predictors[[paste0(nm, "_ego")]]     <- ego
       attr_predictors[[paste0(nm, "_alter")]]   <- alter
       attr_predictors[[paste0(nm, "_absdiff")]] <- abs(ego - alter)
     } else {
       xf <- factor(x)
-      xc <- as.character(xf)
-      same <- (matrix(xc, n, n)[keep] == matrix(xc, n, n, byrow = TRUE)[keep]) * 1
-      # dummy-code ego/alter category membership (nodefactor-style), baseline dropped
+      # comparing the factor's integer codes: 1 = i and j hold the same
+      # category, 0 = different (NA if either value is NA)
+      xi <- as.integer(xf)
+      same <- (xi[base$i] == xi[base$j]) * 1
       for (lv in levels(xf)[-1]) {
-        dv <- as.numeric(xc == lv)
-        attr_predictors[[paste0(nm, "_ego_", lv)]]   <- matrix(dv, n, n)[keep]
-        attr_predictors[[paste0(nm, "_alter_", lv)]] <- matrix(dv, n, n, byrow = TRUE)[keep]
+        dv <- as.numeric(xf == lv)
+        attr_predictors[[paste0(nm, "_ego_", lv)]]   <- dv[base$i]
+        attr_predictors[[paste0(nm, "_alter_", lv)]] <- dv[base$j]
       }
       attr_predictors[[paste0(nm, "_same")]] <- same
     }
@@ -96,8 +95,8 @@
     indeg_k  <- colSums(mk, na.rm = TRUE)
     other_predictors[[paste0(onm, "_tie")]]          <- as.vector(mk)[keep]
     other_predictors[[paste0(onm, "_recip")]]        <- as.vector(t(mk))[keep]
-    other_predictors[[paste0(onm, "_ego_outdeg")]]   <- matrix(outdeg_k, n, n)[keep]
-    other_predictors[[paste0(onm, "_alter_indeg")]]  <- matrix(indeg_k, n, n, byrow = TRUE)[keep]
+    other_predictors[[paste0(onm, "_ego_outdeg")]]   <- outdeg_k[base$i]
+    other_predictors[[paste0(onm, "_alter_indeg")]]  <- indeg_k[base$j]
   }
 
   pca_model <- NULL
@@ -119,17 +118,14 @@
     }
   }
 
-  # NOTE: cbind(data.frame, NULL) is NOT a no-op - it errors ("arguments
-  # imply differing number of rows: n, 0"), so the single-network case
-  # (other_predictors empty -> NULL) must never be passed to cbind directly.
-  # Building a list and dropping NULLs first (do.call) sidesteps that.
   parts <- list(
     base,
     y = y,
     reciprocity = recip,
     log_twopath = log1p(twopath),
     as.data.frame(attr_predictors, check.names = FALSE),
-    if (length(other_predictors)) as.data.frame(other_predictors, check.names = FALSE) else NULL
+    if (length(other_predictors)) as.data.frame(other_predictors,
+                                                check.names = FALSE) else NULL
   )
   data <- do.call(cbind, Filter(Negate(is.null), parts))
   rownames(data) <- NULL
@@ -188,13 +184,15 @@
 #' attrs <- data.frame(age = rnorm(n, 35, 8), dept = sample(letters[1:3], n, TRUE))
 #' res <- dyad_regression(list(friends = friends, advice = advice), attrs, target = "friends")
 #' summary(res$model)
-dyad_regression <- function(net_list, attributes, target,
-                             attr_types = NULL,
-                             family = "gaussian",
-                             other_net_predictors = c("raw", "pca"),
-                             n_components = 3,
-                             id_col = NULL,
-                             fit = TRUE) {
+dyad_regression <- function(net_list,
+                            attributes,
+                            target,
+                            attr_types = NULL,
+                            family = "gaussian",
+                            other_net_predictors = c("raw", "pca"),
+                            n_components = 3,
+                            id_col = NULL,
+                            fit = TRUE) {
   other_net_predictors <- match.arg(other_net_predictors)
 
   net_names <- names(net_list)
@@ -208,7 +206,8 @@ dyad_regression <- function(net_list, attributes, target,
   }
 
   ref_g <- if (inherits(net_list[[1]], "igraph")) net_list[[1]] else
-    igraph::graph_from_adjacency_matrix(mats[[1]] != 0, mode = "directed", diag = FALSE)
+    igraph::graph_from_adjacency_matrix(mats[[1]] != 0, mode = "directed",
+                                        diag = FALSE)
   attributes <- .align_attributes(ref_g, attributes, id_col = id_col)
 
   built <- .build_dyad_data(mats, attributes, target_idx, attr_types,
@@ -219,10 +218,9 @@ dyad_regression <- function(net_list, attributes, target,
 
   if (fit) {
     fit_rows <- !is.na(built$data$y)
-    # y ~ . (rather than pasting predictor names into a formula string) so
-    # that predictor names arising from factor levels with non-syntactic
-    # characters (spaces, hyphens, "&", ...) don't break formula parsing.
-    model_data <- built$data[fit_rows, setdiff(names(built$data), c("i", "j")), drop = FALSE]
+    model_data <- built$data[fit_rows,
+                             setdiff(names(built$data), c("i", "j")),
+                             drop = FALSE]
     result$model <- stats::glm(y ~ ., data = model_data, family = family)
   }
 

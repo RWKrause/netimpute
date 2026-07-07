@@ -92,6 +92,32 @@ test_that("netmice: models - network dyad-level formula is honoured", {
   expect_false(anyNA(fit$imp_nets[[1]]$friends[off]))
 })
 
+test_that("netmice: the target's own alter-composition homophily features are available as predictors", {
+  fx <- make_missing_fixture()
+  # age's own alter-mean measures (incl. the incoming-tie mean, computed
+  # from other nodes' - mostly observed - reports) must be part of the
+  # predictor set when imputing age: referencing one in a `models` formula
+  # only works if it exists in the auto-generated feature data.frame.
+  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, printFlag = FALSE,
+                  models = list("age ~ friends_age_alter_mean_in + friends_age_alter_mean"))
+  expect_false(anyNA(fit$imp[[1]]$age))
+})
+
+test_that("netmice: ego-value-dependent homophily features of the target are withheld", {
+  fx <- make_missing_fixture()
+  # age_diff_in is a function of ego's own (partly imputed) age, so it must
+  # not exist among age's own predictors - a formula asking for it errors.
+  expect_error(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE,
+            models = list("age ~ friends_age_diff_in")),
+    "could not evaluate"
+  )
+  # ...but the same measure built from a *different* attribute is available.
+  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, printFlag = FALSE,
+                  models = list("status ~ friends_age_diff_in"))
+  expect_false(anyNA(fit$imp[[1]]$status))
+})
+
 test_that("netmice: models errors on an unknown left-hand side", {
   fx <- make_missing_fixture()
   expect_error(

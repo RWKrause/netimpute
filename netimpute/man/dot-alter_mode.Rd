@@ -4,7 +4,7 @@
 \alias{.alter_mode}
 \title{Modal category among a node's alters}
 \usage{
-.alter_mode(g, x)
+.alter_mode(g, x, nb_all = NULL)
 }
 \description{
 Modal category among a node's alters

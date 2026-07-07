@@ -76,17 +76,17 @@
 #'                        output = "both", keep_vars = c("total_degree"))
 #' head(res$predictors)
 net_predictors <- function(net_list,
-                            attr_list,
-                            attr_types = NULL,
-                            measure_set = c("core", "full"),
-                            output = c("measures", "pca", "both"),
-                            n_components = 5,
-                            keep_vars = NULL,
-                            residualize_kept = FALSE,
-                            impute_na = c("mean", "complete_cases"),
-                            scale_pca = TRUE,
-                            id_col = NULL,
-                            use_sna = TRUE) {
+                           attr_list,
+                           attr_types = NULL,
+                           measure_set = c("core", "full"),
+                           output = c("measures", "pca", "both"),
+                           n_components = 5,
+                           keep_vars = NULL,
+                           residualize_kept = FALSE,
+                           impute_na = c("mean", "complete_cases"),
+                           scale_pca = TRUE,
+                           id_col = NULL,
+                           use_sna = TRUE) {
   measure_set <- match.arg(measure_set)
   output <- match.arg(output)
   impute_na <- match.arg(impute_na)
@@ -95,7 +95,8 @@ net_predictors <- function(net_list,
     stop("`net_list` and `attr_list` must have the same length.", call. = FALSE)
   }
   if (output == "both" && length(keep_vars) == 0) {
-    stop("`keep_vars` must be supplied (non-empty) when output = 'both'.", call. = FALSE)
+    stop("`keep_vars` must be supplied (non-empty) when output = 'both'.",
+         call. = FALSE)
   }
 
   ref_cols <- names(attr_list[[1]])
@@ -110,7 +111,10 @@ net_predictors <- function(net_list,
   measure_fn <- if (measure_set == "full") net_measures_full else net_measures_core
 
   measures_list <- Map(function(net, attrs, nid) {
-    args <- list(net = net, attributes = attrs, attr_types = attr_types, id_col = id_col)
+    args <- list(net = net,
+                 attributes = attrs,
+                 attr_types = attr_types,
+                 id_col = id_col)
     if (measure_set == "full") args$use_sna <- use_sna
     out <- do.call(measure_fn, args)
     out$network_id <- nid
@@ -163,10 +167,6 @@ net_predictors <- function(net_list,
 
   if (residualize_kept && length(keep_vars)) {
     keep_mat <- as.matrix(measures_df[keep_rows, keep_vars, drop = FALSE])
-    # NOTE: `keep_mat[] <- lapply(...)` (the naive way to NA-fill column-wise)
-    # silently turns keep_mat into a list-mode matrix, which lm()/model.frame()
-    # then reject with "invalid type (list)". apply() rebuilds a proper
-    # numeric matrix, exactly like .clean_predictor_matrix() does elsewhere.
     keep_mat <- apply(keep_mat, 2, function(col) {
       col[is.na(col)] <- mean(col, na.rm = TRUE)
       col
@@ -179,7 +179,8 @@ net_predictors <- function(net_list,
   var0 <- apply(pca_input, 2, function(col) stats::var(col, na.rm = TRUE))
   bad <- names(var0)[is.na(var0) | var0 == 0]
   if (length(bad)) {
-    message("netimpute: dropping zero-variance / all-NA measure(s) before PCA: ",
+    message(
+      "netimpute: dropping zero-variance / all-NA measure(s) before PCA: ",
             paste(bad, collapse = ", "))
     pca_input <- pca_input[, setdiff(colnames(pca_input), bad), drop = FALSE]
   }
@@ -191,7 +192,9 @@ net_predictors <- function(net_list,
 
   base_df <- measures_df[keep_rows, front, drop = FALSE]
   if (output == "both") {
-    predictors <- cbind(base_df, measures_df[keep_rows, keep_vars, drop = FALSE], comps)
+    predictors <- cbind(base_df,
+                        measures_df[keep_rows, keep_vars, drop = FALSE],
+                        comps)
   } else {
     predictors <- cbind(base_df, comps)
   }
@@ -215,12 +218,8 @@ net_predictors <- function(net_list,
     dummy_list <- lapply(cat_cols, function(cn) {
       f <- factor(df[[cn]])
       if (nlevels(f) < 2) return(NULL)
-      # NOTE: passing na.action to model.matrix() directly (with no `data`/
-      # model.frame) does NOT actually get honored - it silently falls back
-      # to dropping NA rows, which desyncs row counts against the rest of
-      # the data.frame. Building the model.frame explicitly first is the
-      # only way na.pass is respected (NA rows come back as NA, not dropped).
-      mf <- stats::model.frame(~f - 1, data = data.frame(f = f), na.action = stats::na.pass)
+      mf <- stats::model.frame(~f - 1, data = data.frame(f = f),
+                               na.action = stats::na.pass)
       mm <- stats::model.matrix(~f - 1, data = mf)
       lvls <- levels(f)[-1]
       mm <- mm[, paste0("f", lvls), drop = FALSE]

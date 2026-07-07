@@ -19,6 +19,33 @@ test_that("dyad_regression: default args (gaussian family) fit and build correct
                   %in% names(res$data)))
 })
 
+test_that(".build_dyad_data: dyad-level values match a hand-built reference (ego = i, alter = j, same = shared category)", {
+  m <- matrix(0, 3, 3); m[1, 2] <- 1
+  age <- c(10, 20, 30)
+  grp <- c("A", "B", "A")
+  built <- suppressMessages(.build_dyad_data(
+    list(friends = m),
+    data.frame(age = age, grp = grp),
+    target_idx = 1,
+    attr_types = c(age = "continuous", grp = "multinomial")
+  ))
+  d <- built$data
+  # off-diagonal dyads in column-major order
+  expect_equal(d$i, c(2L, 3L, 1L, 3L, 1L, 2L))
+  expect_equal(d$j, c(1L, 1L, 2L, 2L, 3L, 3L))
+  # ego is the sender's (i's) value, alter the receiver's (j's)
+  expect_equal(d$age_ego,   age[d$i])
+  expect_equal(d$age_alter, age[d$j])
+  expect_equal(d$age_absdiff, abs(age[d$i] - age[d$j]))
+  # _same must be 1 exactly when i and j hold the identical category, else 0:
+  # nodes 1 and 3 are both "A", node 2 is "B"
+  expect_equal(d$grp_same, as.numeric(grp[d$i] == grp[d$j]))
+  expect_equal(d$grp_same, c(0, 1, 0, 0, 1, 0))
+  # level dummies index the right node too
+  expect_equal(d$grp_ego_B,   as.numeric(grp[d$i] == "B"))
+  expect_equal(d$grp_alter_B, as.numeric(grp[d$j] == "B"))
+})
+
 test_that("dyad_regression: target may be given by index or by name with identical results", {
   res_name <- dyad_regression(list(friends = nets$friends_bin, advice = nets$advice_weighted),
                                attrs, target = "friends")

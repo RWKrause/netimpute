@@ -16,7 +16,7 @@ cases). mice's own ridge fallback inside estimice() only nudges a
 near-singular X'X - it is not wrapped in its own try(), and does not
 reliably rescue a design matrix that is *exactly* rank-deficient (p >= n),
 which then crashes with an uncaught "system is exactly singular" error
-instead of degrading gracefully. Pre-emptively reducing dimensionality
+instead of degrading gracefully. Preemptively reducing dimensionality
 here keeps p comfortably below n by construction, the same fix already
 offered explicitly via net_predictors(output = "pca") - just applied
 automatically inside the imputation loop where the user has no direct

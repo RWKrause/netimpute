@@ -84,36 +84,13 @@ net_diagnostics <- function(mat) {
   if (is.null(dim(x)) || ncol(x) == 0) {
     x <- matrix(1, length(y), 1, dimnames = list(NULL, "(Intercept)"))
   }
-
-  # `method` here is either the user-facing method for numeric/binary
-  # targets ("pmm", for now) or the literal string "polyreg", used
-  # internally (never user-selectable via netmice()'s `method` argument) for
-  # nominal attributes with more than two categories - see .run_one_chain().
   if (method == "polyreg") {
     if (!requireNamespace("nnet", quietly = TRUE)) {
       stop("Package 'nnet' is required for multinomial imputation of attributes with more than ",
            "two categories. Install with install.packages('nnet').", call. = FALSE)
     }
-    # mice::mice.impute.polyreg() fits a proper multinomial logistic
-    # regression (nnet::multinom) and draws from the predicted class
-    # probabilities - unlike pmm's linear-fit-then-nearest-donor approach,
-    # it doesn't impose a spurious numeric ordering on unordered categories.
-    # It works standalone (no updateLog()/state dependency like pmm below),
-    # and takes/returns the category labels directly, so no integer coding
-    # round-trip is needed.
     return(mice::mice.impute.polyreg(y = y, ry = ry, x = x))
   }
-
-  # mice::mice.impute.pmm() is normally only ever called from inside a full
-  # mice() run. Whenever its internal estimice() hits a (near-)singular
-  # design matrix - routine here, given the auto-generated predictor sets
-  # are often collinear - it calls mice's updateLog(), which walks up the
-  # call stack (via parent.frame()) looking for `state`/`loggedEvents`
-  # objects that mice()'s own sampler() normally creates. Calling pmm
-  # standalone skips that setup entirely, so updateLog() fails with
-  # "object 'state' not found". Defining minimal stand-ins right here (this
-  # frame is within updateLog's search range) satisfies that lookup without
-  # needing to go through mice()'s full machinery.
   state <- list(it = 0L, im = 0L, dep = "y", meth = method, log = FALSE)
   loggedEvents <- NULL
   switch(method,
@@ -134,7 +111,7 @@ net_diagnostics <- function(mat) {
 #' near-singular X'X - it is not wrapped in its own try(), and does not
 #' reliably rescue a design matrix that is *exactly* rank-deficient (p >= n),
 #' which then crashes with an uncaught "system is exactly singular" error
-#' instead of degrading gracefully. Pre-emptively reducing dimensionality
+#' instead of degrading gracefully. Preemptively reducing dimensionality
 #' here keeps p comfortably below n by construction, the same fix already
 #' offered explicitly via net_predictors(output = "pca") - just applied
 #' automatically inside the imputation loop where the user has no direct
@@ -183,7 +160,8 @@ net_diagnostics <- function(mat) {
   mf <- tryCatch(
     stats::model.frame(rhs, data = data, na.action = stats::na.pass),
     error = function(e) {
-      stop("netimpute: could not evaluate a `models` formula (", conditionMessage(e), "). ",
+      stop("netimpute: could not evaluate a `models` formula (",
+           conditionMessage(e), "). ",
            "Every predictor named in a formula must exist in `data`, or - for network-derived ",
            "terms in an attribute's formula, or for any term in a network's formula - match the ",
            "auto-generated predictor names (e.g. 'friends_indegree' for an attribute's formula ",
@@ -198,63 +176,87 @@ net_diagnostics <- function(mat) {
 
 #' Run one full imputation chain (one of the `m` imputations)
 #' @keywords internal
-.run_one_chain <- function(im, data, mats0, var_names, net_names, attr_types, var_levels,
-                            ry_vars, ry_nets, vm_names, net_missing_names,
-                            method, donors, measure_set, other_net_predictors, n_components,
-                            model_map, maxit, printFlag, seed) {
-  # Pin the RNG algorithm explicitly, not just the seed value: future's
-  # seed = TRUE (used for ncores > 1) switches multisession workers to
-  # "L'Ecuyer-CMRG" for proper parallel streams, so the *same* seed integer
-  # would otherwise produce a *different* random sequence there than in the
-  # calling session's default "Mersenne-Twister" - silently breaking the
-  # sequential-vs-parallel reproducibility this is meant to guarantee.
+.run_one_chain <- function(im,
+                           data,
+                           mats0,
+                           var_names,
+                           net_names,
+                           attr_types,
+                           var_levels,
+                           ry_vars,
+                           ry_nets,
+                           vm_names,
+                           net_missing_names,
+                           method,
+                           donors,
+                           measure_set,
+                           other_net_predictors,
+                           n_components,
+                           model_map,
+                           maxit,
+                           printFlag,
+                           seed) {
   if (!is.na(seed)) set.seed(seed + im, kind = "Mersenne-Twister")
 
   cur_data <- data
-  for (v in vm_names) cur_data[[v]] <- .init_fill_vector(cur_data[[v]])
+  for (v in vm_names) {
+    cur_data[[v]] <- .init_fill_vector(cur_data[[v]])
+    }
   cur_mats <- mats0
-  for (nm in net_missing_names) cur_mats[[nm]] <- .init_fill_matrix(cur_mats[[nm]])
+  for (nm in net_missing_names) {
+    cur_mats[[nm]] <- .init_fill_matrix(cur_mats[[nm]])
+  }
 
-  # A single interleaved, randomly-ordered visit sequence over BOTH
-  # attributes and networks, fixed for this chain (different per chain m).
   targets <- sample(c(vm_names, net_missing_names))
 
+  # igraph views of the current networks, for attribute-visit predictors.
+  # Converted once here and refreshed per network right after that network
+  # is re-imputed - not rebuilt for every network at every attribute visit.
+  cur_gs <- stats::setNames(lapply(cur_mats, .mat_to_igraph), net_names)
+
   net_diag_names <- c("density", "reciprocity", "transitivity", "n_isolates", "avg_inv_geodesic")
-  chainMean <- matrix(NA_real_, length(vm_names), maxit, dimnames = list(vm_names, seq_len(maxit)))
+  chainMean <- matrix(NA_real_, length(vm_names), maxit,
+                      dimnames = list(vm_names, seq_len(maxit)))
   chainVar  <- chainMean
-  netChain  <- array(NA_real_, dim = c(length(net_names), length(net_diag_names), maxit),
-                      dimnames = list(net_names, net_diag_names, seq_len(maxit)))
+  netChain  <- array(NA_real_, dim = c(length(net_names),
+                                       length(net_diag_names), maxit),
+                      dimnames = list(net_names, net_diag_names,
+                                      seq_len(maxit)))
 
   for (it in seq_len(maxit)) {
-    if (printFlag) cat(" imputation", im, "- iter", it, "- order:", paste(targets, collapse = " -> "), "\n")
-
+    if (printFlag) {
+      cat(" imputation", im, "- iter", it, "- order:",
+          paste(targets, collapse = " -> "), "\n")
+    }
     for (tgt in targets) {
       if (tgt %in% vm_names) {
         v <- tgt
         ry <- ry_vars[[v]]
-        # Network-derived features are rebuilt from cur_mats *as they stand
-        # right now* - i.e. reflecting any network updated earlier in this
-        # same sweep - not a snapshot from the start of the iteration.
-        cur_gs <- stats::setNames(lapply(cur_mats, .mat_to_igraph), net_names)
 
-        # `v` is excluded from the attribute set used to build homophily-type
-        # network features: those (e.g. v's own E-I index / alter mean) are a
-        # function of v's current, not-yet-finalized value at each node, so
-        # using them as predictors for v would be circular. Other attributes'
-        # homophily features are fine and are kept.
+        # ALL attributes - including `v` itself - feed the homophily-type
+        # network features: alter-composition measures of v (e.g. the mean of
+        # v among one's alters, and especially among in-neighbours, whose
+        # nominations are typically observed reports by others) are functions
+        # of OTHER nodes' values and carry real homophily/influence signal
+        # for v. Only the measures that are direct functions of ego's own
+        # current value of v (v's E-I index and avg-|diff| terms) are dropped
+        # for the target: they would regress v on a transform of itself,
+        # anchoring imputations to their own previous draws. The raw `v`
+        # column is likewise excluded from the predictors - it is the target.
         other_data <- cur_data[setdiff(var_names, v)]
+        ego_feats <- paste0(v, "_", c("ei_index", "diff_out", "diff_in"))
         # Prefix measure names with the network name only when there is more
         # than one network (or a bare name would collide with a raw attribute
         # of the same name) - with a single, non-colliding network, bare
         # names like "indegree" are unambiguous and nicer to use in `models`.
         net_feats_list <- lapply(seq_along(cur_gs), function(k) {
           fn <- if (measure_set == "full") net_measures_full else net_measures_core
-          out <- fn(cur_gs[[k]], other_data, attr_types = attr_types)
-          out <- out[setdiff(names(out), "node_id")]
+          out <- fn(cur_gs[[k]], cur_data, attr_types = attr_types)
+          out <- out[setdiff(names(out), c("node_id", ego_feats))]
           if (length(net_names) > 1) {
             names(out) <- paste0(net_names[k], "_", names(out))
           } else {
-            clash <- names(out) %in% names(other_data)
+            clash <- names(out) %in% names(cur_data)
             names(out)[clash] <- paste0(net_names[k], "_", names(out)[clash])
           }
           out
@@ -276,32 +278,40 @@ net_diagnostics <- function(mat) {
 
         lvls <- var_levels[[v]]
         if (is.numeric(cur_data[[v]])) {
-          imp_vals <- .impute_univariate(method, y = cur_data[[v]], ry = ry, x = x, donors = donors)
+          imp_vals <- .impute_univariate(method,
+                                         y = cur_data[[v]],
+                                         ry = ry,
+                                         x = x,
+                                         donors = donors)
         } else if (length(lvls) > 2) {
-          # Nominal, >2 categories: a proper multinomial model, not a linear-
-          # regression-on-integer-codes hack (see .impute_univariate()) -
-          # avoids imposing a spurious numeric ordering on the categories.
-          imp_vals <- .impute_univariate("polyreg", y = cur_data[[v]], ry = ry, x = x, donors = donors)
+          imp_vals <- .impute_univariate("polyreg",
+                                         y = cur_data[[v]],
+                                         ry = ry,
+                                         x = x,
+                                         donors = donors)
         } else {
-          # Binary: mice::mice.impute.pmm() requires a numeric y (it hits
-          # lm.fit() internally), so we code the two categories to 0/1, run
-          # PMM in that space, and map back. Harmless here - a linear
-          # probability model on a 2-level outcome, and PMM only ever
-          # returns an *observed* donor's value either way.
           y_codes <- as.integer(factor(cur_data[[v]], levels = lvls))
-          imp_codes <- .impute_univariate(method, y = y_codes, ry = ry, x = x, donors = donors)
+          imp_codes <- .impute_univariate(method,
+                                          y = y_codes,
+                                          ry = ry,
+                                          x = x,
+                                          donors = donors)
           imp_vals <- lvls[imp_codes]
         }
         cur_data[[v]][!ry] <- imp_vals
 
       } else {
         k <- match(tgt, net_names)
-        built <- .build_dyad_data(cur_mats, cur_data, target_idx = k, attr_types = attr_types,
-                                   other_net_predictors = other_net_predictors,
-                                   n_components = n_components)
+        built <- .build_dyad_data(cur_mats,
+                                  cur_data,
+                                  target_idx = k,
+                                  attr_types = attr_types,
+                                  other_net_predictors = other_net_predictors,
+                                  n_components = n_components)
         d <- built$data
         ry <- ry_nets[[tgt]][cbind(d$i, d$j)]
-        auto_x <- .clean_predictor_matrix(d[setdiff(names(d), c("i", "j", "y"))],
+        auto_x <- .clean_predictor_matrix(d[setdiff(names(d),
+                                                    c("i", "j", "y"))],
                                            max_cols = .safe_max_cols(sum(ry)))
 
         if (!is.null(model_map[[tgt]])) {
@@ -313,16 +323,22 @@ net_diagnostics <- function(mat) {
         }
 
         y <- d$y
-        imp_vals <- .impute_univariate(method, y = y, ry = ry, x = x, donors = donors)
+        imp_vals <- .impute_univariate(method,
+                                       y = y,
+                                       ry = ry,
+                                       x = x,
+                                       donors = donors)
         mis_idx <- which(!ry)
         cur_mats[[tgt]][cbind(d$i[mis_idx], d$j[mis_idx])] <- imp_vals
+        cur_gs[[tgt]] <- .mat_to_igraph(cur_mats[[tgt]])
       }
     }
 
     ## ---- diagnostics (once per full sweep) ----
     for (v in vm_names) {
       vals <- cur_data[[v]][!ry_vars[[v]]]
-      if (!is.numeric(vals)) vals <- as.numeric(factor(vals, levels = var_levels[[v]]))
+      if (!is.numeric(vals)) vals <- as.numeric(
+        factor(vals, levels = var_levels[[v]]))
       chainMean[v, it] <- mean(vals, na.rm = TRUE)
       chainVar[v, it]  <- stats::var(vals, na.rm = TRUE)
     }
@@ -332,8 +348,12 @@ net_diagnostics <- function(mat) {
     }
   }
 
-  list(data = cur_data, net_list = cur_mats, chainMean = chainMean, chainVar = chainVar,
-       netChain = netChain, visit_order = targets)
+  list(data = cur_data,
+       net_list = cur_mats,
+       chainMean = chainMean,
+       chainVar = chainVar,
+       netChain = netChain,
+       visit_order = targets)
 }
 
 #' Joint multiple imputation of nodal attributes and network ties
@@ -347,7 +367,16 @@ net_diagnostics <- function(mat) {
 #' chains (see Details). Each attribute is imputed conditional on the other
 #' attributes and on network-derived predictors from whichever networks were
 #' most recently updated (via \code{\link{net_measures_core}}/
-#' \code{\link{net_measures_full}}); each network's missing ties are imputed
+#' \code{\link{net_measures_full}}) - including the alter-composition
+#' homophily measures of the target attribute itself (e.g. the mean of the
+#' attribute among a node's alters, overall and over incoming/outgoing ties
+#' separately), which are functions of other nodes' values and typically
+#' among the strongest predictors under homophily or social influence. Only
+#' the target's homophily measures that are direct functions of ego's own
+#' value (its E-I index and average-absolute-difference terms) are withheld
+#' when imputing that attribute, since regressing a variable on a transform
+#' of itself would anchor imputations to their own previous draws. Each
+#' network's missing ties are imputed
 #' conditional on whichever attributes and other networks were most recently
 #' updated (via \code{\link{dyad_regression}}'s predictor set). Only
 #' predictive mean matching is implemented for now (`method = "pmm"`);
@@ -481,14 +510,19 @@ net_diagnostics <- function(mat) {
 #'                models = list("happiness ~ indegree + age + performance * gender"))
 #' out <- complete_netmice(fit, 1)
 #' }
-netmice <- function(data, net_list,
-                     m = 5, maxit = 20, method = "pmm", donors = 5,
-                     measure_set = c("core", "full"),
-                     attr_types = NULL,
-                     other_net_predictors = c("raw", "pca"), n_components = 3,
-                     models = NULL,
-                     ncores = 1L,
-                     seed = NA, printFlag = TRUE) {
+netmice <- function(data,
+                    net_list,
+                    m = 5, maxit = 20,
+                    method = "pmm",
+                    donors = 5,
+                    measure_set = c("core", "full"),
+                    attr_types = NULL,
+                    other_net_predictors = c("raw", "pca"),
+                    n_components = 3,
+                    models = NULL,
+                    ncores = 1L,
+                    seed = NA,
+                    printFlag = TRUE) {
 
   method <- match.arg(method, choices = "pmm")
   measure_set <- match.arg(measure_set)
@@ -499,13 +533,16 @@ netmice <- function(data, net_list,
   var_names <- names(data)
 
   net_names <- names(net_list)
-  if (is.null(net_names)) net_names <- paste0("net", seq_along(net_list))
-  names(net_list) <- net_names
+  if (is.null(net_names)) {
+    net_names <- paste0("net", seq_along(net_list))
+    names(net_list) <- net_names
+  }
 
   name_clash <- intersect(var_names, net_names)
   if (length(name_clash)) {
     stop("Attribute column name(s) and network name(s) must be distinct - both are used as: ",
-         paste(name_clash, collapse = ", "), ". Rename one or the other.", call. = FALSE)
+         paste(name_clash, collapse = ", "),
+         ". Rename one or the other.", call. = FALSE)
   }
 
   mats0 <- lapply(net_list, .as_matrix_generic)
@@ -515,10 +552,12 @@ netmice <- function(data, net_list,
   }
 
   attr_types <- .resolve_attr_types(data, attr_types)
-  var_levels <- lapply(data, function(x) if (!is.numeric(x)) sort(unique(x[!is.na(x)])) else NULL)
+  var_levels <- lapply(data, function(x) if (
+    !is.numeric(x)) sort(unique(x[!is.na(x)])) else NULL)
 
   var_missing <- vapply(data, function(x) any(is.na(x)), logical(1))
-  net_missing <- vapply(mats0, function(mat) any(is.na(mat[row(mat) != col(mat)])), logical(1))
+  net_missing <- vapply(mats0, function(mat) any(
+    is.na(mat[row(mat) != col(mat)])), logical(1))
   vm_names <- var_names[var_missing]
   net_missing_names <- net_names[net_missing]
 
@@ -528,23 +567,38 @@ netmice <- function(data, net_list,
   model_map <- .parse_models(models)
   bad_models <- setdiff(names(model_map), c(var_names, net_names))
   if (length(bad_models)) {
-    stop("`models` references unknown variable/network(s) on the left-hand side: ",
+    stop("`models` references unknown variable/network(s): ",
          paste(bad_models, collapse = ", "), call. = FALSE)
   }
   unused_models <- setdiff(names(model_map), c(vm_names, net_missing_names))
   if (length(unused_models)) {
-    message("netimpute: `models` formula(s) for ", paste(unused_models, collapse = ", "),
+    message("netimpute: `models` formula(s) for ",
+            paste(unused_models, collapse = ", "),
             " will not be used - that variable/network has no missing values to impute.")
   }
 
   run_chain <- function(im) {
     .run_one_chain(
-      im = im, data = data, mats0 = mats0, var_names = var_names, net_names = net_names,
-      attr_types = attr_types, var_levels = var_levels, ry_vars = ry_vars, ry_nets = ry_nets,
-      vm_names = vm_names, net_missing_names = net_missing_names,
-      method = method, donors = donors, measure_set = measure_set,
-      other_net_predictors = other_net_predictors, n_components = n_components,
-      model_map = model_map, maxit = maxit, printFlag = printFlag, seed = seed
+      im = im,
+      data = data,
+      mats0 = mats0,
+      var_names = var_names,
+      net_names = net_names,
+      attr_types = attr_types,
+      var_levels = var_levels,
+      ry_vars = ry_vars,
+      ry_nets = ry_nets,
+      vm_names = vm_names,
+      net_missing_names = net_missing_names,
+      method = method,
+      donors = donors,
+      measure_set = measure_set,
+      other_net_predictors = other_net_predictors,
+      n_components = n_components,
+      model_map = model_map,
+      maxit = maxit,
+      printFlag = printFlag,
+      seed = seed
     )
   }
 
@@ -556,7 +610,10 @@ netmice <- function(data, net_list,
     old_plan <- future::plan()
     on.exit(future::plan(old_plan), add = TRUE)
     future::plan(future::multisession, workers = ncores)
-    if (printFlag) cat("Running", m, "chains on", ncores, "workers via future::multisession\n")
+    if (printFlag) {
+      cat("Running", m, "chains on", ncores,
+          "workers via future::multisession\n")
+    }
     futures <- lapply(seq_len(m), function(im) {
       future::future(run_chain(im), seed = TRUE, packages = "netimpute")
     })
@@ -569,12 +626,17 @@ netmice <- function(data, net_list,
   imp_nets <- lapply(chains, `[[`, "net_list")
   visit_orders <- lapply(chains, `[[`, "visit_order")
 
-  net_diag_names <- c("density", "reciprocity", "transitivity", "n_isolates", "avg_inv_geodesic")
+  net_diag_names <- c("density", "reciprocity",
+                      "transitivity", "n_isolates", "avg_inv_geodesic")
   chainMean <- array(NA_real_, dim = c(length(vm_names), maxit, m),
                       dimnames = list(vm_names, seq_len(maxit), seq_len(m)))
   chainVar <- chainMean
-  netChain <- array(NA_real_, dim = c(length(net_names), length(net_diag_names), maxit, m),
-                     dimnames = list(net_names, net_diag_names, seq_len(maxit), seq_len(m)))
+  netChain <- array(NA_real_, dim = c(length(net_names),
+                                      length(net_diag_names), maxit, m),
+                     dimnames = list(net_names,
+                                     net_diag_names,
+                                     seq_len(maxit),
+                                     seq_len(m)))
   for (im in seq_len(m)) {
     if (length(vm_names)) {
       chainMean[, , im] <- chains[[im]]$chainMean
@@ -585,11 +647,22 @@ netmice <- function(data, net_list,
 
   structure(
     list(
-      data = data, net_list = mats0, m = m, maxit = maxit, method = method, donors = donors,
-      models = model_map, ncores = ncores,
-      imp = imp_data, imp_nets = imp_nets, visit_orders = visit_orders,
-      chainMean = chainMean, chainVar = chainVar, netChain = netChain,
-      var_missing = vm_names, net_missing = net_missing_names
+      data = data,
+      net_list = mats0,
+      m = m,
+      maxit = maxit,
+      method = method,
+      donors = donors,
+      models = model_map,
+      ncores = ncores,
+      imp = imp_data,
+      imp_nets = imp_nets,
+      visit_orders = visit_orders,
+      chainMean = chainMean,
+      chainVar = chainVar,
+      netChain = netChain,
+      var_missing = vm_names,
+      net_missing = net_missing_names
     ),
     class = "netmids"
   )

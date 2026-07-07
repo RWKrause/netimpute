@@ -56,7 +56,9 @@ For each column of `attributes`, homophily columns are added:
   \item binary / multinomial: \code{<attr>_ei_index}, \code{<attr>_blau_index},
         \code{<attr>_alter_mode}
   \item continuous: \code{<attr>_diff_out}, \code{<attr>_diff_in},
-        \code{<attr>_alter_mean}, \code{<attr>_alter_min}, \code{<attr>_alter_max}
+        \code{<attr>_alter_mean}, \code{<attr>_alter_mean_in},
+        \code{<attr>_alter_mean_out}, \code{<attr>_alter_min},
+        \code{<attr>_alter_max}
 }
 }
 \examples{

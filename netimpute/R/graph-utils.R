@@ -8,14 +8,15 @@
 #' supported - several measures (e.g. path-based centrality, which requires
 #' non-negative edge costs; the weighted transitivity/reciprocity formulas
 #' below, which assume weights are magnitudes) are not well-defined or not
-#' implemented for them. This is checked as early as possible so the failure
-#' is a clear, immediate error rather than a confusing downstream one.
+#' implemented for them.
 #' @keywords internal
 .reject_negative <- function(vals) {
   if (any(vals < 0, na.rm = TRUE)) {
     stop("netimpute currently only supports binary (0/1) or non-negative weighted ",
          "networks. Found negative tie value(s) - signed network support is not ",
-         "implemented yet.", call. = FALSE)
+         "implemented yet. Try splitting the network into positive and negative ",
+         "ties and imputing these separately. (Signed nature here not guaranteed.)",
+         call. = FALSE)
   }
   invisible(NULL)
 }
@@ -157,7 +158,8 @@
     return(data.frame(
       reciprocal_degree = rep(NA_real_, n),
       nonreciprocal_degree = rep(NA_real_, n),
-      reciprocity_ratio = ifelse(either_n == 0, NA_real_, absdiff_sum / either_n)
+      reciprocity_ratio = ifelse(either_n == 0, NA_real_,
+                                 absdiff_sum / either_n)
     ))
   }
 
@@ -184,7 +186,7 @@
 #' is actually closed (j and k are themselves tied). The ratio reduces to the
 #' ordinary (binary) local clustering coefficient when all weights are 1.
 #' Direction is collapsed first (mean of the two directed weights) since
-#' clustering is inherently an undirected-triad concept here.
+#' clustering is an undirected-triad concept here.
 #' @keywords internal
 .weighted_local_clustering <- function(g) {
   n <- igraph::vcount(g)

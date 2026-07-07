@@ -189,8 +189,9 @@ constraint \citep{Burt1992}, harmonic closeness, and local clustering ---
 together with, for every column of \code{attributes}, a
 scale-appropriate homophily/alter-similarity block: an E-I index, Blau's
 index, and the modal alter category for binary or multinomial attributes;
-average absolute difference on outgoing and on incoming ties, plus the
-mean, minimum, and maximum alter value, for continuous attributes.
+average absolute difference on outgoing and on incoming ties, the
+mean, minimum, and maximum alter value, plus the mean alter value over
+incoming and over outgoing ties separately, for continuous attributes.
 \code{net\_measures\_full()} extends this to roughly 28 structural measures
 (the full degree family, eigenvector/alpha/PageRank centrality, structural
 holes measures, coreness, and, if \pkg{sna} is installed, its five
@@ -271,6 +272,18 @@ updated; visiting a network rebuilds its dyadic predictors
 most recently updated. Because these predictors depend on \emph{the other}
 data type, they are never cached: a variable that depends on both a network
 and an attribute is effectively recomputed at both points in the cycle.
+
+An attribute's predictor set includes the homophily block built from the
+target attribute itself, not only from the other attributes: under
+homophily or social influence, the composition of a node's alters on the
+very variable being imputed (its mean alter value, and in particular the
+mean over \emph{incoming} ties, which rest on other --- typically observed
+--- nodes' reports) is among the strongest predictors available. The only
+measures withheld when imputing an attribute are those that are direct
+functions of ego's own current value of that attribute (its E-I index and
+the two average-absolute-difference terms), since regressing a variable on
+a transform of itself would anchor imputed values to their own previous
+draws rather than to information from the rest of the data.
 
 The actual univariate draw is delegated to \pkg{mice}: predictive mean
 matching (\code{mice.impute.pmm()}) for numeric and binary targets (a
