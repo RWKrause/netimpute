@@ -22,6 +22,81 @@
   ))
 }
 
+#' Validate a `structural` specification against the networks
+#'
+#' Accepts `NULL`, a single n x n logical matrix (recycled for every
+#' network), or a named list of n x n logical matrices whose names match
+#' networks in `net_names`. Returns `NULL` or a full-length named list
+#' (one entry per network, `NULL` where no structural cells were given).
+#' @keywords internal
+.validate_structural <- function(structural, net_names, n) {
+  if (is.null(structural)) return(NULL)
+  check_one <- function(mat, label) {
+    if (is.numeric(mat) && all(mat %in% c(0, 1))) mat <- mat == 1
+    if (!is.matrix(mat) || !is.logical(mat)) {
+      stop("`structural` (", label, ") must be a logical matrix ",
+           "(TRUE = structurally absent cell).", call. = FALSE)
+    }
+    if (nrow(mat) != n || ncol(mat) != n) {
+      stop("`structural` (", label, ") must be ", n, " x ", n,
+           " to match the networks.", call. = FALSE)
+    }
+    if (anyNA(mat)) {
+      stop("`structural` (", label, ") must not contain NA: every cell is ",
+           "either structurally absent (TRUE) or not (FALSE).", call. = FALSE)
+    }
+    mat
+  }
+  if (is.matrix(structural)) {
+    m <- check_one(structural, "single matrix")
+    return(stats::setNames(rep(list(m), length(net_names)), net_names))
+  }
+  if (is.list(structural)) {
+    if (is.null(names(structural)) || any(!nzchar(names(structural)))) {
+      stop("When `structural` is a list, every element must be named after ",
+           "a network in `net_list`.", call. = FALSE)
+    }
+    unknown <- setdiff(names(structural), net_names)
+    if (length(unknown)) {
+      stop("`structural` names unknown network(s): ",
+           paste(unknown, collapse = ", "), call. = FALSE)
+    }
+    out <- stats::setNames(vector("list", length(net_names)), net_names)
+    for (nm in names(structural)) {
+      out[[nm]] <- check_one(structural[[nm]], nm)
+    }
+    return(out)
+  }
+  stop("`structural` must be NULL, one n x n logical matrix, or a named ",
+       "list of n x n logical matrices.", call. = FALSE)
+}
+
+#' Fix structurally absent cells at zero in a list of adjacency matrices
+#'
+#' A structurally absent tie is zero by design, so an observed non-zero
+#' value there contradicts the specification and errors; `NA` cells (coded
+#' missing, but actually impossible) are silently set to 0 so they are never
+#' treated as missing ties to impute.
+#' @keywords internal
+.apply_structural_zeros <- function(mats, struct_list) {
+  if (is.null(struct_list)) return(mats)
+  for (nm in names(mats)) {
+    s <- struct_list[[nm]]
+    if (is.null(s)) next
+    m <- mats[[nm]]
+    cells <- s & (row(m) != col(m))
+    bad <- cells & !is.na(m) & m != 0
+    if (any(bad)) {
+      stop("Network '", nm, "' has ", sum(bad), " observed non-zero tie(s) ",
+           "in cell(s) marked structurally absent by `structural`. ",
+           "Structurally absent cells must be 0 (or NA).", call. = FALSE)
+    }
+    m[cells] <- 0
+    mats[[nm]] <- m
+  }
+  mats
+}
+
 #' Build the dyad-level (cell-level) design matrix for one target network
 #'
 #' @param mats named list of adjacency matrices (all n x n, same node order)
@@ -32,13 +107,17 @@
 #'   principal components of all "other network" terms)
 #' @param n_components number of PCA components to retain when
 #'   `other_net_predictors = "pca"`
+#' @param structural optional n x n logical matrix marking the *target*
+#'   network's structurally absent (zero-by-design) cells; those dyads are
+#'   dropped from the design data entirely, like the diagonal
 #' @keywords internal
 .build_dyad_data <- function(mats,
                              attributes,
                              target_idx,
                              attr_types = NULL,
                              other_net_predictors = c("raw", "pca"),
-                             n_components = 3) {
+                             n_components = 3,
+                             structural = NULL) {
   other_net_predictors <- match.arg(other_net_predictors)
   net_names <- names(mats)
   n <- nrow(mats[[1]])
@@ -54,6 +133,12 @@
 
   base <- expand.grid(i = seq_len(n), j = seq_len(n))
   keep <- base$i != base$j
+  # structurally absent cells are zero by design: they are no more an
+  # observation of the tie process than the diagonal is, so they are dropped
+  # from the dyad data (not fit on, not predicted) - keeping them would
+  # inflate the zeros in the working model. expand.grid varies `i` fastest,
+  # matching as.vector()'s column-major order used for y/recip below.
+  if (!is.null(structural)) keep <- keep & !as.vector(structural)
   base <- base[keep, ]
 
   y <- as.vector(target_mat)[keep]
@@ -164,16 +249,52 @@
 #'   other network; "pca" replaces them with the first `n_components`
 #'   principal components, useful when many other networks are supplied.
 #' @param n_components Number of PCA components when `other_net_predictors = "pca"`.
+#' @param structural `NULL` (default), one n x n logical matrix, or a named
+#'   list of n x n logical matrices (names matching networks in `net_list`).
+#'   `TRUE` marks a cell whose tie is *structurally absent* - zero by design
+#'   (e.g. ties into another school class that respondents could not
+#'   nominate) rather than a genuine observation of "no tie". A single matrix
+#'   applies the same structural cells to every network; a named list lets
+#'   them differ per network (networks without an entry have none).
+#'   Structural cells must hold 0 or `NA` in the supplied networks (a
+#'   non-zero observed value there errors); they are fixed at 0 and the
+#'   *target* network's structural dyads are removed from the returned
+#'   `data` - and hence from the regression - like the diagonal, so they
+#'   cannot inflate the zeros of the fitted model.
+#' @param random_intercepts `NULL` (default) fits an ordinary `glm()`.
+#'   Otherwise a character vector - any of `"ego"`, `"alter"`, `"dyad"` - and
+#'   the model is fit with \pkg{lme4} instead, adding a random intercept per
+#'   sender node (`"ego"`, i.e. `(1 | i)`), per receiver node (`"alter"`,
+#'   `(1 | j)`), and/or per unordered node pair (`"dyad"`). Ego and alter
+#'   intercepts capture actor-level activity/popularity heterogeneity beyond
+#'   the degree terms, as in the social relations model; the dyad intercept
+#'   is the SRM-style relationship effect and only makes sense for *directed*
+#'   networks, where the ordered cells (i,j) and (j,i) are two genuine
+#'   observations of the pair. For an undirected target those two rows are
+#'   exact duplicates of one another, so a dyad intercept has effectively one
+#'   unique observation per group and degenerates into a residual term - a
+#'   warning is issued and ego/alter intercepts are recommended instead.
+#'   When `"dyad"` is included, the fixed `reciprocity` term is dropped from
+#'   the model: it is the transpose of `y`, so together with a per-dyad
+#'   intercept the model could reproduce `y` exactly (exact singularity) -
+#'   in SRM terms the dyad effect *is* the reciprocity/relationship term and
+#'   replaces it. Gaussian-identity models use `lme4::lmer()`; any other
+#'   `family` uses `lme4::glmer()`.
 #' @param id_col Optional attribute column used to match node order.
 #' @param fit Logical; if `FALSE`, only build and return the design data
 #'   (no model fit) - e.g. for feeding to a custom imputation routine.
 #'
 #' @return A list with `data` (dyad-level data.frame including `i`, `j`
 #'   indices and, when applicable, `NA` in `y` for missing ties), `pca_model`
-#'   (or `NULL`), `target` (network name), and `model` (the fitted `glm`, or
-#'   `NULL` if `fit = FALSE`). The model is fit only on dyads with observed
-#'   `y`; predictions for all dyads (including missing ones) can be obtained
-#'   with `predict(result$model, newdata = result$data)`.
+#'   (or `NULL`), `target` (network name), and `model` (the fitted `glm` -
+#'   or `merMod` when `random_intercepts` is used - or `NULL` if
+#'   `fit = FALSE`). The model is fit only on dyads with observed `y`;
+#'   predictions for all dyads (including missing ones) can be obtained with
+#'   `predict(result$model, newdata = result$data)` (for a mixed model, the
+#'   grouping columns `.ego`/`.alter`/`.dyad` are already present in `data`,
+#'   and `allow.new.levels = TRUE` may be needed if some node never appears
+#'   in an observed dyad). Dyads marked structurally absent via `structural`
+#'   do not appear in `data` at all.
 #' @export
 #'
 #' @examples
@@ -191,9 +312,16 @@ dyad_regression <- function(net_list,
                             family = "gaussian",
                             other_net_predictors = c("raw", "pca"),
                             n_components = 3,
+                            structural = NULL,
+                            random_intercepts = NULL,
                             id_col = NULL,
                             fit = TRUE) {
   other_net_predictors <- match.arg(other_net_predictors)
+  if (!is.null(random_intercepts)) {
+    random_intercepts <- match.arg(random_intercepts,
+                                   c("ego", "alter", "dyad"),
+                                   several.ok = TRUE)
+  }
 
   net_names <- names(net_list)
   if (is.null(net_names)) net_names <- paste0("net", seq_along(net_list))
@@ -205,24 +333,92 @@ dyad_regression <- function(net_list,
     stop("`target` not found in `net_list`.", call. = FALSE)
   }
 
+  struct_list <- .validate_structural(structural, net_names, nrow(mats[[1]]))
+  mats <- .apply_structural_zeros(mats, struct_list)
+
+  # reference graph only supplies node count/names for attribute alignment;
+  # unknown (NA) ties must not break its construction
+  ref_m <- mats[[1]] != 0
+  ref_m[is.na(ref_m)] <- FALSE
   ref_g <- if (inherits(net_list[[1]], "igraph")) net_list[[1]] else
-    igraph::graph_from_adjacency_matrix(mats[[1]] != 0, mode = "directed",
+    igraph::graph_from_adjacency_matrix(ref_m, mode = "directed",
                                         diag = FALSE)
   attributes <- .align_attributes(ref_g, attributes, id_col = id_col)
 
   built <- .build_dyad_data(mats, attributes, target_idx, attr_types,
-                             other_net_predictors, n_components)
+                             other_net_predictors, n_components,
+                             structural = struct_list[[net_names[target_idx]]])
+
+  if (length(random_intercepts)) {
+    built$data <- .add_dyad_groups(built$data)
+  }
 
   result <- list(data = built$data, pca_model = built$pca_model,
                   target = built$target_name, model = NULL)
 
   if (fit) {
     fit_rows <- !is.na(built$data$y)
+    group_cols <- c(".ego", ".alter", ".dyad")
     model_data <- built$data[fit_rows,
-                             setdiff(names(built$data), c("i", "j")),
+                             setdiff(names(built$data),
+                                     c("i", "j", group_cols)),
                              drop = FALSE]
-    result$model <- stats::glm(y ~ ., data = model_data, family = family)
+
+    if (length(random_intercepts)) {
+      if (!requireNamespace("lme4", quietly = TRUE)) {
+        stop("Package 'lme4' is required for `random_intercepts`. ",
+             "Install with install.packages('lme4').", call. = FALSE)
+      }
+      if ("dyad" %in% random_intercepts &&
+          isSymmetric(unname(mats[[target_idx]]))) {
+        warning("The target network is undirected, so each dyad's two rows ",
+                "(i,j)/(j,i) are exact duplicates: a dyad random intercept ",
+                "has effectively one unique observation per group and will ",
+                "absorb the residual variance. Consider random_intercepts = ",
+                "c('ego', 'alter') instead.", call. = FALSE)
+      }
+      md <- cbind(model_data,
+                  built$data[fit_rows, group_cols, drop = FALSE])
+      fixed <- setdiff(names(model_data), "y")
+      if ("dyad" %in% random_intercepts) {
+        # The fixed `reciprocity` term is the transpose of y, so together
+        # with a per-dyad intercept the model can reproduce y exactly
+        # (b_d = y_ij + y_ji with coefficient -1 on reciprocity): the
+        # residual variance collapses and lme4 aborts. In SRM terms the
+        # dyad effect *is* the reciprocity/relationship term, so it
+        # replaces the fixed effect rather than coexisting with it.
+        fixed <- setdiff(fixed, "reciprocity")
+        message("netimpute: dropping the fixed `reciprocity` term - it is ",
+                "absorbed by (and singular with) the dyad random intercept.")
+      }
+      re_terms <- c(ego = "(1 | .ego)", alter = "(1 | .alter)",
+                    dyad = "(1 | .dyad)")[random_intercepts]
+      fml <- stats::reformulate(
+        c(sprintf("`%s`", fixed), re_terms),
+        response = "y"
+      )
+      fam <- family
+      if (is.character(fam)) fam <- get(fam, mode = "function")
+      if (is.function(fam)) fam <- fam()
+      result$model <- if (fam$family == "gaussian" && fam$link == "identity") {
+        lme4::lmer(fml, data = md)
+      } else {
+        lme4::glmer(fml, data = md, family = fam)
+      }
+    } else {
+      result$model <- stats::glm(y ~ ., data = model_data, family = family)
+    }
   }
 
   result
+}
+
+#' Append `.ego`, `.alter`, `.dyad` grouping factors (from the `i`/`j`
+#' indices) to a dyad-level data.frame, for lme4 random intercepts.
+#' @keywords internal
+.add_dyad_groups <- function(d) {
+  d$.ego   <- factor(d$i)
+  d$.alter <- factor(d$j)
+  d$.dyad  <- factor(paste0(pmin(d$i, d$j), "_", pmax(d$i, d$j)))
+  d
 }

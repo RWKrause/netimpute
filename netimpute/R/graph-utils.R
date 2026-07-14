@@ -80,7 +80,12 @@
       stop("Not every vertex in the network could be matched to a row in `attributes` via id_col.",
            call. = FALSE)
     }
-    attributes <- attributes[ord, , drop = FALSE]
+    # Once rows are aligned the identifier has served its purpose; leaving it
+    # in would have every downstream consumer treat it as an n-level
+    # multinomial attribute (n-1 ego + n-1 alter dummies in the dyad design,
+    # meaningless homophily measures in net_measures_*).
+    attributes <- attributes[ord, setdiff(names(attributes), id_col),
+                             drop = FALSE]
   } else if (nrow(attributes) != n) {
     stop(sprintf(
       "`attributes` has %d rows but the network has %d nodes. Supply `id_col` to match by name, or align rows by position.",

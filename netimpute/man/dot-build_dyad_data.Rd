@@ -10,7 +10,8 @@
   target_idx,
   attr_types = NULL,
   other_net_predictors = c("raw", "pca"),
-  n_components = 3
+  n_components = 3,
+  structural = NULL
 )
 }
 \arguments{
@@ -27,6 +28,10 @@ principal components of all "other network" terms)}
 
 \item{n_components}{number of PCA components to retain when
 `other_net_predictors = "pca"`}
+
+\item{structural}{optional n x n logical matrix marking the *target*
+network's structurally absent (zero-by-design) cells; those dyads are
+dropped from the design data entirely, like the diagonal}
 }
 \description{
 Build the dyad-level (cell-level) design matrix for one target network

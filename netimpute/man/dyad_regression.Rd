@@ -12,6 +12,8 @@ dyad_regression(
   family = "gaussian",
   other_net_predictors = c("raw", "pca"),
   n_components = 3,
+  structural = NULL,
+  random_intercepts = NULL,
   id_col = NULL,
   fit = TRUE
 )
@@ -44,6 +46,39 @@ principal components, useful when many other networks are supplied.}
 
 \item{n_components}{Number of PCA components when `other_net_predictors = "pca"`.}
 
+\item{structural}{`NULL` (default), one n x n logical matrix, or a named
+list of n x n logical matrices (names matching networks in `net_list`).
+`TRUE` marks a cell whose tie is *structurally absent* - zero by design
+(e.g. ties into another school class that respondents could not
+nominate) rather than a genuine observation of "no tie". A single matrix
+applies the same structural cells to every network; a named list lets
+them differ per network (networks without an entry have none).
+Structural cells must hold 0 or `NA` in the supplied networks (a
+non-zero observed value there errors); they are fixed at 0 and the
+*target* network's structural dyads are removed from the returned
+`data` - and hence from the regression - like the diagonal, so they
+cannot inflate the zeros of the fitted model.}
+
+\item{random_intercepts}{`NULL` (default) fits an ordinary `glm()`.
+Otherwise a character vector - any of `"ego"`, `"alter"`, `"dyad"` - and
+the model is fit with \pkg{lme4} instead, adding a random intercept per
+sender node (`"ego"`, i.e. `(1 | i)`), per receiver node (`"alter"`,
+`(1 | j)`), and/or per unordered node pair (`"dyad"`). Ego and alter
+intercepts capture actor-level activity/popularity heterogeneity beyond
+the degree terms, as in the social relations model; the dyad intercept
+is the SRM-style relationship effect and only makes sense for *directed*
+networks, where the ordered cells (i,j) and (j,i) are two genuine
+observations of the pair. For an undirected target those two rows are
+exact duplicates of one another, so a dyad intercept has effectively one
+unique observation per group and degenerates into a residual term - a
+warning is issued and ego/alter intercepts are recommended instead.
+When `"dyad"` is included, the fixed `reciprocity` term is dropped from
+the model: it is the transpose of `y`, so together with a per-dyad
+intercept the model could reproduce `y` exactly (exact singularity) -
+in SRM terms the dyad effect *is* the reciprocity/relationship term and
+replaces it. Gaussian-identity models use `lme4::lmer()`; any other
+`family` uses `lme4::glmer()`.}
+
 \item{id_col}{Optional attribute column used to match node order.}
 
 \item{fit}{Logical; if `FALSE`, only build and return the design data
@@ -52,10 +87,15 @@ principal components, useful when many other networks are supplied.}
 \value{
 A list with `data` (dyad-level data.frame including `i`, `j`
   indices and, when applicable, `NA` in `y` for missing ties), `pca_model`
-  (or `NULL`), `target` (network name), and `model` (the fitted `glm`, or
-  `NULL` if `fit = FALSE`). The model is fit only on dyads with observed
-  `y`; predictions for all dyads (including missing ones) can be obtained
-  with `predict(result$model, newdata = result$data)`.
+  (or `NULL`), `target` (network name), and `model` (the fitted `glm` -
+  or `merMod` when `random_intercepts` is used - or `NULL` if
+  `fit = FALSE`). The model is fit only on dyads with observed `y`;
+  predictions for all dyads (including missing ones) can be obtained with
+  `predict(result$model, newdata = result$data)` (for a mixed model, the
+  grouping columns `.ego`/`.alter`/`.dyad` are already present in `data`,
+  and `allow.new.levels = TRUE` may be needed if some node never appears
+  in an observed dyad). Dyads marked structurally absent via `structural`
+  do not appear in `data` at all.
 }
 \description{
 Regresses the vectorized off-diagonal cells of a target network on

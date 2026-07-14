@@ -22,9 +22,13 @@
 }
 
 #' @keywords internal
-.init_fill_matrix <- function(mat) {
+.init_fill_matrix <- function(mat, structural = NULL) {
   diag(mat) <- 0
   off <- row(mat) != col(mat)
+  # structurally absent cells are fixed zeros: they are neither filled nor
+  # allowed into the donor pool (their design-zeros would inflate the zeros
+  # sampled into the genuinely missing cells)
+  if (!is.null(structural)) off <- off & !structural
   miss <- off & is.na(mat)
   if (any(miss)) {
     obs_vals <- mat[off & !is.na(mat)]
@@ -98,6 +102,59 @@ net_diagnostics <- function(mat) {
     stop("Unsupported imputation method: '", method, "'. Currently only 'pmm' is implemented.",
          call. = FALSE)
   )
+}
+
+#' PMM for network ties with lme4 random intercepts
+#'
+#' Fits a linear mixed working model on the observed dyads - fixed effects
+#' for every predictor column plus random intercepts per ego (sender), alter
+#' (receiver), and/or unordered dyad, as requested - then performs classic
+#' predictive-mean matching on the conditional fitted values (fixed +
+#' predicted random effects): each missing dyad receives the observed `y` of
+#' one of its `donors` nearest neighbours in fitted-value space, drawn at
+#' random. A linear working model is used regardless of tie type, consistent
+#' with the PMM step for binary ties (the fitted values only rank/match
+#' donors). Unlike `mice::mice.impute.pmm()` this matching is "type-0" (no
+#' Bayesian draw of the coefficients); between-imputation variability comes
+#' from the donor draw and the chain stochasticity. If the mixed model fails
+#' to fit, falls back to `mice::mice.impute.pmm()` with a warning.
+#' @keywords internal
+.impute_pmm_ranef <- function(y, ry, x, donors, ego, alter, random_intercepts) {
+  if (!requireNamespace("lme4", quietly = TRUE)) {
+    stop("Package 'lme4' is required for `net_random_intercepts`. ",
+         "Install with install.packages('lme4').", call. = FALSE)
+  }
+  x <- as.matrix(x)
+  if (ncol(x)) colnames(x) <- paste0("V", seq_len(ncol(x)))
+  df <- as.data.frame(x)
+  df$y <- y
+  df <- .add_dyad_groups(cbind(df, i = ego, j = alter))
+  re_terms <- c(ego = "(1 | .ego)", alter = "(1 | .alter)",
+                dyad = "(1 | .dyad)")[random_intercepts]
+  fml <- stats::reformulate(c(colnames(x), re_terms), response = "y")
+
+  fit <- tryCatch(
+    suppressMessages(suppressWarnings(
+      lme4::lmer(fml, data = df[ry, , drop = FALSE], REML = FALSE)
+    )),
+    error = function(e) e
+  )
+  if (inherits(fit, "error")) {
+    warning("netimpute: mixed-model PMM failed to fit (",
+            conditionMessage(fit),
+            "); falling back to standard PMM for this visit.", call. = FALSE)
+    return(mice::mice.impute.pmm(y = y, ry = ry, x = x, donors = donors))
+  }
+
+  # allow.new.levels covers nodes/dyads whose every tie is missing: they get
+  # the population-level (zero) random effect, i.e. the fixed-effect fit.
+  yhat <- stats::predict(fit, newdata = df, allow.new.levels = TRUE)
+  yhat_obs <- yhat[ry]
+  y_obs <- y[ry]
+  vapply(yhat[!ry], function(yh) {
+    nn <- order(abs(yhat_obs - yh))[seq_len(min(donors, length(yhat_obs)))]
+    y_obs[nn][sample.int(length(nn), 1)]
+  }, numeric(1))
 }
 
 #' Clean an auto-generated predictor matrix for PMM, and - if `max_cols` is
@@ -185,6 +242,7 @@ net_diagnostics <- function(mat) {
                            var_levels,
                            ry_vars,
                            ry_nets,
+                           structural,
                            vm_names,
                            net_missing_names,
                            method,
@@ -192,6 +250,7 @@ net_diagnostics <- function(mat) {
                            measure_set,
                            other_net_predictors,
                            n_components,
+                           net_random_intercepts,
                            model_map,
                            maxit,
                            printFlag,
@@ -204,7 +263,7 @@ net_diagnostics <- function(mat) {
     }
   cur_mats <- mats0
   for (nm in net_missing_names) {
-    cur_mats[[nm]] <- .init_fill_matrix(cur_mats[[nm]])
+    cur_mats[[nm]] <- .init_fill_matrix(cur_mats[[nm]], structural[[nm]])
   }
 
   targets <- sample(c(vm_names, net_missing_names))
@@ -302,16 +361,24 @@ net_diagnostics <- function(mat) {
 
       } else {
         k <- match(tgt, net_names)
+        # structural cells of the target never enter the dyad data: they are
+        # not fit on (no zero inflation) and never receive imputed values
         built <- .build_dyad_data(cur_mats,
                                   cur_data,
                                   target_idx = k,
                                   attr_types = attr_types,
                                   other_net_predictors = other_net_predictors,
-                                  n_components = n_components)
+                                  n_components = n_components,
+                                  structural = structural[[tgt]])
         d <- built$data
         ry <- ry_nets[[tgt]][cbind(d$i, d$j)]
-        auto_x <- .clean_predictor_matrix(d[setdiff(names(d),
-                                                    c("i", "j", "y"))],
+        # With a dyad random intercept the fixed `reciprocity` term (the
+        # transpose of y) makes the working model exactly singular (see
+        # dyad_regression); the dyad effect is the SRM reciprocity term and
+        # replaces it.
+        drop_cols <- c("i", "j", "y",
+                       if ("dyad" %in% net_random_intercepts) "reciprocity")
+        auto_x <- .clean_predictor_matrix(d[setdiff(names(d), drop_cols)],
                                            max_cols = .safe_max_cols(sum(ry)))
 
         if (!is.null(model_map[[tgt]])) {
@@ -323,11 +390,21 @@ net_diagnostics <- function(mat) {
         }
 
         y <- d$y
-        imp_vals <- .impute_univariate(method,
-                                       y = y,
-                                       ry = ry,
-                                       x = x,
-                                       donors = donors)
+        if (length(net_random_intercepts)) {
+          imp_vals <- .impute_pmm_ranef(y = y,
+                                        ry = ry,
+                                        x = x,
+                                        donors = donors,
+                                        ego = d$i,
+                                        alter = d$j,
+                                        random_intercepts = net_random_intercepts)
+        } else {
+          imp_vals <- .impute_univariate(method,
+                                         y = y,
+                                         ry = ry,
+                                         x = x,
+                                         donors = donors)
+        }
         mis_idx <- which(!ry)
         cur_mats[[tgt]][cbind(d$i[mis_idx], d$j[mis_idx])] <- imp_vals
         cur_gs[[tgt]] <- .mat_to_igraph(cur_mats[[tgt]])
@@ -471,6 +548,40 @@ net_diagnostics <- function(mat) {
 #'   \code{\link{dyad_regression}}'s dyad-data builder for the "other
 #'   networks" terms - "raw" (all terms) or "pca" (first `n_components`
 #'   components).
+#' @param net_random_intercepts `NULL` (default) or a character vector - any
+#'   of `"ego"`, `"alter"`, `"dyad"`. When set, the working model for
+#'   *network-tie* imputation is a linear mixed model fit with
+#'   \code{lme4::lmer()} instead of mice's linear PMM regression, adding a
+#'   random intercept per sender node (`"ego"`), per receiver node
+#'   (`"alter"`), and/or per unordered node pair (`"dyad"`); missing ties are
+#'   then imputed by predictive-mean matching on the conditional fitted
+#'   values (fixed + predicted random effects). Ego/alter intercepts capture
+#'   actor-level activity/popularity heterogeneity beyond the degree-based
+#'   fixed effects, as in the social relations model. The `"dyad"` intercept
+#'   is the SRM relationship effect and is meaningful only for *directed*
+#'   networks, where cells (i,j) and (j,i) are two genuine observations per
+#'   pair; for an undirected network those two rows are exact duplicates, so
+#'   a dyad intercept degenerates into a residual term - a warning is issued
+#'   if any network to impute is undirected. When `"dyad"` is included, the
+#'   target's fixed `reciprocity` term is dropped from the working model
+#'   (it is the transpose of `y` and exactly singular with a per-dyad
+#'   intercept - the dyad effect is the SRM reciprocity term and replaces
+#'   it). Note the matching is "type-0"
+#'   (no Bayesian coefficient draw, unlike `mice::mice.impute.pmm()`);
+#'   between-imputation variability comes from the donor draw and the chain
+#'   stochasticity. Attribute imputation is unaffected. Requires \pkg{lme4}.
+#' @param structural `NULL` (default), one n x n logical matrix, or a named
+#'   list of n x n logical matrices whose names match networks in `net_list`.
+#'   `TRUE` marks a cell whose tie is *structurally absent* - zero by design
+#'   (e.g. a nomination that was impossible by the study design) rather than
+#'   a genuine "no tie" observation. A single matrix applies the same
+#'   structural cells to every network; a named list lets them differ per
+#'   network (networks without an entry have none). Structural cells must
+#'   hold 0 or `NA` in the supplied networks (an observed non-zero value
+#'   there errors); they are fixed at 0 throughout: never imputed, excluded
+#'   from the initialization donor pool, and removed from the dyad-level
+#'   regression rows whenever that network is the imputation target, so the
+#'   design-zeros cannot inflate the zeros of the working model.
 #' @param models Optional list/character vector of formula strings (or
 #'   formula objects), one per attribute/network you want a custom model
 #'   for - see Details. E.g.
@@ -484,7 +595,9 @@ net_diagnostics <- function(mat) {
 #'   order) as in `mice`.
 #'
 #' @return An object of class `"netmids"` with elements: `data`, `net_list`
-#'   (original, NA-preserving inputs), `m`, `maxit`, `method`, `donors`,
+#'   (original, NA-preserving inputs, except that structurally absent cells
+#'   are fixed at 0), `m`, `maxit`, `method`, `donors`, `structural` (the
+#'   per-network list of structural-zero matrices, or `NULL`),
 #'   `models`, `imp` (list of `m` completed attribute data.frames),
 #'   `imp_nets` (list of `m` lists of completed adjacency matrices),
 #'   `visit_orders` (the randomized target order used in each chain),
@@ -519,6 +632,8 @@ netmice <- function(data,
                     attr_types = NULL,
                     other_net_predictors = c("raw", "pca"),
                     n_components = 3,
+                    net_random_intercepts = NULL,
+                    structural = NULL,
                     models = NULL,
                     ncores = 1L,
                     seed = NA,
@@ -527,6 +642,11 @@ netmice <- function(data,
   method <- match.arg(method, choices = "pmm")
   measure_set <- match.arg(measure_set)
   other_net_predictors <- match.arg(other_net_predictors)
+  if (!is.null(net_random_intercepts)) {
+    net_random_intercepts <- match.arg(net_random_intercepts,
+                                       c("ego", "alter", "dyad"),
+                                       several.ok = TRUE)
+  }
 
   data <- as.data.frame(data)
   n <- nrow(data)
@@ -551,6 +671,12 @@ netmice <- function(data,
     stop("Every network must have as many nodes as there are rows in `data`.", call. = FALSE)
   }
 
+  # fix structurally absent cells at 0 up front: they then count as observed
+  # (never missing, never imputed) and only need special handling where the
+  # dyad-level regression rows are built
+  struct_list <- .validate_structural(structural, net_names, n)
+  mats0 <- .apply_structural_zeros(mats0, struct_list)
+
   attr_types <- .resolve_attr_types(data, attr_types)
   var_levels <- lapply(data, function(x) if (
     !is.numeric(x)) sort(unique(x[!is.na(x)])) else NULL)
@@ -560,6 +686,20 @@ netmice <- function(data,
     is.na(mat[row(mat) != col(mat)])), logical(1))
   vm_names <- var_names[var_missing]
   net_missing_names <- net_names[net_missing]
+
+  if ("dyad" %in% net_random_intercepts) {
+    undirected <- net_missing_names[vapply(
+      mats0[net_missing_names],
+      function(mat) isSymmetric(unname(mat)), logical(1))]
+    if (length(undirected)) {
+      warning("net_random_intercepts includes 'dyad' but network(s) ",
+              paste(undirected, collapse = ", "),
+              " are undirected: each dyad's two rows (i,j)/(j,i) are exact ",
+              "duplicates, so a dyad random intercept has effectively one ",
+              "unique observation per group and will absorb the residual ",
+              "variance. Consider c('ego', 'alter') instead.", call. = FALSE)
+    }
+  }
 
   ry_vars <- lapply(data, function(x) !is.na(x))
   ry_nets <- lapply(mats0, function(mat) !is.na(mat) & (row(mat) != col(mat)))
@@ -588,6 +728,7 @@ netmice <- function(data,
       var_levels = var_levels,
       ry_vars = ry_vars,
       ry_nets = ry_nets,
+      structural = struct_list,
       vm_names = vm_names,
       net_missing_names = net_missing_names,
       method = method,
@@ -595,6 +736,7 @@ netmice <- function(data,
       measure_set = measure_set,
       other_net_predictors = other_net_predictors,
       n_components = n_components,
+      net_random_intercepts = net_random_intercepts,
       model_map = model_map,
       maxit = maxit,
       printFlag = printFlag,
@@ -653,6 +795,8 @@ netmice <- function(data,
       maxit = maxit,
       method = method,
       donors = donors,
+      net_random_intercepts = net_random_intercepts,
+      structural = struct_list,
       models = model_map,
       ncores = ncores,
       imp = imp_data,
@@ -687,6 +831,15 @@ print.netmids <- function(x, ...) {
       "  Method:", x$method, "  Donors:", x$donors, "  Cores:", x$ncores, "\n")
   cat("Variables with missingness:", paste(x$var_missing, collapse = ", "), "\n")
   cat("Networks with missingness:", paste(x$net_missing, collapse = ", "), "\n")
+  if (length(x$net_random_intercepts)) {
+    cat("Network-tie random intercepts (lme4):",
+        paste(x$net_random_intercepts, collapse = ", "), "\n")
+  }
+  if (length(x$structural)) {
+    has_struct <- !vapply(x$structural, is.null, logical(1))
+    cat("Structurally absent ties (fixed zeros) in:",
+        paste(names(x$structural)[has_struct], collapse = ", "), "\n")
+  }
   if (length(x$models)) {
     cat("Custom models for:", paste(names(x$models), collapse = ", "), "\n")
   }

@@ -88,6 +88,72 @@ test_that("dyad_regression: id_col aligns shuffled attributes", {
   res_ref <- dyad_regression(list(friends = m), attrs, target = "friends")
   expect_equal(res$data$y, res_ref$data$y)
   expect_equal(res$data$age_ego, res_ref$data$age_ego)
+  # the identifier itself must not leak into the predictor set (it would
+  # otherwise expand into n-1 ego + n-1 alter dummies plus id_same)
+  expect_identical(names(res$data), names(res_ref$data))
+  expect_false(any(grepl("^id_", names(res$data))))
+})
+
+test_that("dyad_regression: random_intercepts fits an lme4 model with the right grouping factors", {
+  skip_if_not_installed("lme4")
+  n <- nrow(nets$friends_bin)
+  res <- dyad_regression(list(friends = nets$friends_bin, advice = nets$advice_weighted),
+                          attrs, target = "friends",
+                          random_intercepts = c("ego", "alter"))
+  expect_s4_class(res$model, "lmerMod")
+  expect_setequal(names(lme4::ranef(res$model)), c(".ego", ".alter"))
+  expect_equal(nrow(lme4::ranef(res$model)$.ego), n)
+  expect_equal(nrow(lme4::ranef(res$model)$.alter), n)
+  # grouping columns are returned so predict() works on res$data
+  expect_true(all(c(".ego", ".alter", ".dyad") %in% names(res$data)))
+  pred <- predict(res$model, newdata = res$data, allow.new.levels = TRUE)
+  expect_length(pred, n * (n - 1))
+})
+
+test_that("dyad_regression: a dyad random intercept on a directed target has one group per unordered pair", {
+  skip_if_not_installed("lme4")
+  n <- nrow(nets$friends_bin)
+  expect_message(
+    res <- dyad_regression(list(friends = nets$friends_bin), attrs,
+                            target = "friends", random_intercepts = "dyad"),
+    "reciprocity"
+  )
+  expect_s4_class(res$model, "lmerMod")
+  expect_equal(nrow(lme4::ranef(res$model)$.dyad), n * (n - 1) / 2)
+  # the fixed reciprocity term must be gone: with a per-dyad intercept it
+  # would make the model exactly singular (b_d = y_ij + y_ji, coef -1)
+  expect_false("reciprocity" %in% names(lme4::fixef(res$model)))
+})
+
+test_that("dyad_regression: random_intercepts + non-gaussian family uses glmer", {
+  skip_if_not_installed("lme4")
+  res <- suppressWarnings(
+    dyad_regression(list(friends = nets$friends_bin), attrs,
+                     target = "friends", family = "binomial",
+                     random_intercepts = "ego")
+  )
+  expect_s4_class(res$model, "glmerMod")
+})
+
+test_that("dyad_regression: warns when a dyad intercept is requested for an undirected target", {
+  skip_if_not_installed("lme4")
+  m <- nets$friends_bin
+  m_undir <- ((m + t(m)) > 0) * 1
+  # a degenerate dyad intercept on duplicated rows may also trigger lme4
+  # convergence warnings - collect everything and look for ours
+  w <- capture_warnings(suppressMessages(
+    dyad_regression(list(friends = m_undir), attrs, target = "friends",
+                     random_intercepts = c("ego", "alter", "dyad"))
+  ))
+  expect_true(any(grepl("undirected", w)))
+})
+
+test_that("dyad_regression: invalid random_intercepts values are rejected", {
+  expect_error(
+    dyad_regression(list(friends = nets$friends_bin), attrs,
+                     target = "friends", random_intercepts = "sender"),
+    "'arg'"
+  )
 })
 
 test_that("dyad_regression: fit = FALSE builds data without fitting a model", {

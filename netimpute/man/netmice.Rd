@@ -15,6 +15,8 @@ netmice(
   attr_types = NULL,
   other_net_predictors = c("raw", "pca"),
   n_components = 3,
+  net_random_intercepts = NULL,
+  structural = NULL,
   models = NULL,
   ncores = 1L,
   seed = NA,
@@ -58,6 +60,42 @@ network-measure function supplies predictors for attribute imputation.}
 networks" terms - "raw" (all terms) or "pca" (first `n_components`
 components).}
 
+\item{net_random_intercepts}{`NULL` (default) or a character vector - any
+of `"ego"`, `"alter"`, `"dyad"`. When set, the working model for
+*network-tie* imputation is a linear mixed model fit with
+\code{lme4::lmer()} instead of mice's linear PMM regression, adding a
+random intercept per sender node (`"ego"`), per receiver node
+(`"alter"`), and/or per unordered node pair (`"dyad"`); missing ties are
+then imputed by predictive-mean matching on the conditional fitted
+values (fixed + predicted random effects). Ego/alter intercepts capture
+actor-level activity/popularity heterogeneity beyond the degree-based
+fixed effects, as in the social relations model. The `"dyad"` intercept
+is the SRM relationship effect and is meaningful only for *directed*
+networks, where cells (i,j) and (j,i) are two genuine observations per
+pair; for an undirected network those two rows are exact duplicates, so
+a dyad intercept degenerates into a residual term - a warning is issued
+if any network to impute is undirected. When `"dyad"` is included, the
+target's fixed `reciprocity` term is dropped from the working model
+(it is the transpose of `y` and exactly singular with a per-dyad
+intercept - the dyad effect is the SRM reciprocity term and replaces
+it). Note the matching is "type-0"
+(no Bayesian coefficient draw, unlike `mice::mice.impute.pmm()`);
+between-imputation variability comes from the donor draw and the chain
+stochasticity. Attribute imputation is unaffected. Requires \pkg{lme4}.}
+
+\item{structural}{`NULL` (default), one n x n logical matrix, or a named
+list of n x n logical matrices whose names match networks in `net_list`.
+`TRUE` marks a cell whose tie is *structurally absent* - zero by design
+(e.g. a nomination that was impossible by the study design) rather than
+a genuine "no tie" observation. A single matrix applies the same
+structural cells to every network; a named list lets them differ per
+network (networks without an entry have none). Structural cells must
+hold 0 or `NA` in the supplied networks (an observed non-zero value
+there errors); they are fixed at 0 throughout: never imputed, excluded
+from the initialization donor pool, and removed from the dyad-level
+regression rows whenever that network is the imputation target, so the
+design-zeros cannot inflate the zeros of the working model.}
+
 \item{models}{Optional list/character vector of formula strings (or
 formula objects), one per attribute/network you want a custom model
 for - see Details. E.g.
@@ -75,7 +113,9 @@ order) as in `mice`.}
 }
 \value{
 An object of class `"netmids"` with elements: `data`, `net_list`
-  (original, NA-preserving inputs), `m`, `maxit`, `method`, `donors`,
+  (original, NA-preserving inputs, except that structurally absent cells
+  are fixed at 0), `m`, `maxit`, `method`, `donors`, `structural` (the
+  per-network list of structural-zero matrices, or `NULL`),
   `models`, `imp` (list of `m` completed attribute data.frames),
   `imp_nets` (list of `m` lists of completed adjacency matrices),
   `visit_orders` (the randomized target order used in each chain),

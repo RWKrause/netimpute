@@ -185,6 +185,81 @@ test_that("netmice: works with a single network", {
   expect_false(anyNA(fit$imp_nets[[1]]$friends[off]))
 })
 
+test_that("netmice: structural - a single matrix fixes the same cells at zero in every network", {
+  fx <- make_missing_fixture()
+  n <- nrow(fx$attrs)
+  # ties into the last 4 nodes are impossible by design in all networks
+  s <- matrix(FALSE, n, n)
+  s[, (n - 3):n] <- TRUE
+  diag(s) <- FALSE
+  off <- row(s) != col(s)
+  # structural cells must be 0 (or NA) in the inputs; code a few of them as
+  # NA - they are design-zeros, not missing ties, and must come back as 0
+  for (nm in names(fx$nets)) fx$nets[[nm]][s] <- 0
+  fx$nets$friends[which(s)[1:5]] <- NA
+
+  # the dyad-level design drops the structural rows entirely (no zero
+  # inflation): n*(n-1) minus the off-diagonal structural cells
+  res <- dyad_regression(fx$nets, fx$attrs, target = "friends",
+                         structural = s, fit = FALSE)
+  expect_equal(nrow(res$data), sum(off) - sum(s & off))
+
+  fit <- netmice(fx$attrs, fx$nets, m = 2, maxit = 2, structural = s,
+                 seed = 11, printFlag = FALSE)
+  expect_s3_class(fit, "netmids")
+  for (im in 1:2) {
+    # structural cells stay exactly zero (including the NA-coded ones) ...
+    expect_true(all(fit$imp_nets[[im]]$friends[s & off] == 0))
+    expect_true(all(fit$imp_nets[[im]]$advice[s & off] == 0))
+    # ... while all genuinely missing ties are imputed
+    expect_false(anyNA(fit$imp_nets[[im]]$friends[off]))
+  }
+})
+
+test_that("netmice: structural - a named list applies different fixed-zero cells per network", {
+  fx <- make_missing_fixture()
+  n <- nrow(fx$attrs)
+  offm <- row(fx$nets$friends) != col(fx$nets$friends)
+  # in friends, nodes 1:5 cannot *send* ties; in advice, nodes 1:5 cannot
+  # *receive* ties - different structural patterns per network
+  s_friends <- matrix(FALSE, n, n); s_friends[1:5, ] <- TRUE
+  s_advice  <- matrix(FALSE, n, n); s_advice[, 1:5]  <- TRUE
+  diag(s_friends) <- FALSE
+  diag(s_advice)  <- FALSE
+  fx$nets$friends[s_friends] <- 0
+  fx$nets$advice[s_advice]   <- 0
+  # give advice some genuinely missing (non-structural) ties too, so both
+  # networks are imputed
+  fx$nets$advice[sample(which(offm & !s_advice), 20)] <- NA
+
+  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2,
+                 structural = list(friends = s_friends, advice = s_advice),
+                 seed = 12, printFlag = FALSE)
+  # each network honours its own structural pattern
+  expect_true(all(fit$imp_nets[[1]]$friends[s_friends & offm] == 0))
+  expect_true(all(fit$imp_nets[[1]]$advice[s_advice & offm] == 0))
+  expect_false(anyNA(fit$imp_nets[[1]]$friends[offm]))
+  expect_false(anyNA(fit$imp_nets[[1]]$advice[offm]))
+  # cells structural in advice only are NOT fixed in friends: observed ties
+  # into nodes 1:5 survive there
+  expect_true(any(fit$imp_nets[[1]]$friends[s_advice & !s_friends & offm] != 0))
+
+  # unknown network names in the list are rejected
+  expect_error(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE,
+            structural = list(nope = s_friends)),
+    "unknown network"
+  )
+  # an observed non-zero tie in a structural cell contradicts the design
+  bad <- matrix(FALSE, n, n)
+  bad[which(fx$nets$friends == 1 & offm)[1]] <- TRUE
+  expect_error(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE,
+            structural = list(friends = bad)),
+    "structurally absent"
+  )
+})
+
 test_that("netmice: a multinomial attribute (>2 levels) dispatches to nnet::multinom", {
   skip_if_not_installed("nnet")
   fx <- make_missing_fixture()
@@ -204,6 +279,56 @@ test_that("netmice: a multinomial attribute (>2 levels) dispatches to nnet::mult
   fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, printFlag = FALSE)
   expect_gt(get(counter_name, envir = .GlobalEnv), 0)
   expect_true(all(fit$imp[[1]]$dept %in% unique(fx$attrs$dept[!is.na(fx$attrs$dept)])))
+})
+
+test_that("netmice: net_random_intercepts imputes all missing ties via the lme4 working model", {
+  skip_if_not_installed("lme4")
+  fx <- make_missing_fixture()
+  # trace the mixed-model PMM helper to prove the lme4 path (not the
+  # standard mice PMM) actually handled the network visits
+  counter_name <- ".netimpute_test_ranef_calls"
+  assign(counter_name, 0, envir = .GlobalEnv)
+  trace(".impute_pmm_ranef", where = asNamespace("netimpute"), print = FALSE,
+        tracer = bquote(assign(.(counter_name), get(.(counter_name), envir = .GlobalEnv) + 1,
+                                envir = .GlobalEnv)))
+  on.exit({
+    untrace(".impute_pmm_ranef", where = asNamespace("netimpute"))
+    rm(list = counter_name, envir = .GlobalEnv)
+  }, add = TRUE)
+  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, printFlag = FALSE,
+                  net_random_intercepts = c("ego", "alter"))
+  expect_s3_class(fit, "netmids")
+  expect_gt(get(counter_name, envir = .GlobalEnv), 0)
+  off <- which(row(fx$nets$friends) != col(fx$nets$friends))
+  expect_false(anyNA(fit$imp_nets[[1]]$friends[off]))
+  # imputed ties are donor values, i.e. observed tie values
+  obs_vals <- unique(fx$nets$friends[off][!is.na(fx$nets$friends[off])])
+  expect_true(all(fit$imp_nets[[1]]$friends[off] %in% obs_vals))
+  expect_equal(fit$net_random_intercepts, c("ego", "alter"))
+})
+
+test_that("netmice: net_random_intercepts = 'dyad' warns for an undirected network with missing ties", {
+  skip_if_not_installed("lme4")
+  fx <- make_missing_fixture()
+  m <- fx$nets$friends
+  undir <- ((ifelse(is.na(m), 0, m) + t(ifelse(is.na(m), 0, m))) > 0) * 1
+  na_cells <- which(is.na(m) & row(m) != col(m))
+  undir[na_cells] <- NA
+  undir[cbind(col(m)[na_cells], row(m)[na_cells])] <- NA  # keep NAs symmetric
+  expect_warning(
+    netmice(fx$attrs, list(friends = undir), m = 1, maxit = 1, printFlag = FALSE,
+            net_random_intercepts = "dyad"),
+    "undirected"
+  )
+})
+
+test_that("netmice: invalid net_random_intercepts values are rejected", {
+  fx <- make_missing_fixture()
+  expect_error(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE,
+            net_random_intercepts = "node"),
+    "'arg'"
+  )
 })
 
 test_that("netmice: rejects a signed network in net_list", {
