@@ -173,20 +173,41 @@ net_diagnostics <- function(mat) {
 #' offered explicitly via net_predictors(output = "pca") - just applied
 #' automatically inside the imputation loop where the user has no direct
 #' control over the predictor count.
+#'
+#' `ry` (the observed-response indicator) matters because the model is fit
+#' on the observed rows only: a column can vary over all rows yet be
+#' constant on the observed subset (e.g. another network's ties that occur
+#' only on dyads where the target is missing). Such a column adds nothing to
+#' the fit, and when it is constant *zero* mice's ridge penalty
+#' (ridge * diag(X'X)) is zero for it, so solve() crashes with "system is
+#' exactly singular" instead of being rescued - hence constant-on-observed
+#' columns are dropped here. The PCA branch needs the analogous guard:
+#' components beyond the input matrix's true rank have (numerically) zero
+#' scores everywhere and crash the same way, so components are capped at the
+#' effective rank and re-checked against `ry`.
 #' @keywords internal
-.clean_predictor_matrix <- function(x, max_cols = NULL) {
+.clean_predictor_matrix <- function(x, max_cols = NULL, ry = NULL) {
   x <- as.matrix(x)
   x <- apply(x, 2, function(col) {
     if (all(is.na(col))) return(rep(0, length(col)))
     col[is.na(col)] <- mean(col, na.rm = TRUE)
     col
   })
-  var0 <- apply(x, 2, stats::var)
-  x <- x[, is.finite(var0) & var0 > 0, drop = FALSE]
+  keep_varying <- function(m) {
+    var_all <- apply(m, 2, stats::var)
+    ok <- is.finite(var_all) & var_all > 0
+    if (!is.null(ry) && any(ry)) {
+      var_obs <- apply(m[ry, , drop = FALSE], 2, stats::var)
+      ok <- ok & is.finite(var_obs) & var_obs > 0
+    }
+    m[, ok, drop = FALSE]
+  }
+  x <- keep_varying(x)
 
   if (!is.null(max_cols) && max_cols >= 1 && ncol(x) > max_cols) {
     pca <- stats::prcomp(x, center = TRUE, scale. = TRUE)
-    x <- pca$x[, seq_len(max_cols), drop = FALSE]
+    n_comp <- min(max_cols, sum(pca$sdev > pca$sdev[1] * 1e-8))
+    x <- keep_varying(pca$x[, seq_len(n_comp), drop = FALSE])
   }
   x
 }
@@ -194,6 +215,18 @@ net_diagnostics <- function(mat) {
 #' @keywords internal
 .safe_max_cols <- function(n_obs) {
   max(5, floor(n_obs / 3))
+}
+
+#' Evaluate one target visit, rethrowing any error with the target's name
+#' and position in the chain. printFlag only prints the per-iteration visit
+#' order, which does not identify *which* target a mid-sweep failure came
+#' from - this does.
+#' @keywords internal
+.visit_context <- function(label, expr) {
+  tryCatch(expr, error = function(e) {
+    stop("netimpute: imputation failed at ", label, ": ",
+         conditionMessage(e), call. = FALSE)
+  })
 }
 
 #' Parse a `models` list into a named-by-LHS lookup of formulas
@@ -212,7 +245,7 @@ net_diagnostics <- function(mat) {
 #' Build extra (formula-specified) predictor columns, NA-safe and
 #' intercept-free, for cbind-ing onto the auto-generated predictor matrix.
 #' @keywords internal
-.model_extra_terms <- function(formula, data) {
+.model_extra_terms <- function(formula, data, ry = NULL) {
   rhs <- stats::delete.response(stats::terms(formula))
   mf <- tryCatch(
     stats::model.frame(rhs, data = data, na.action = stats::na.pass),
@@ -228,7 +261,7 @@ net_diagnostics <- function(mat) {
   )
   mm <- stats::model.matrix(rhs, data = mf)
   mm <- mm[, colnames(mm) != "(Intercept)", drop = FALSE]
-  .clean_predictor_matrix(mm)
+  .clean_predictor_matrix(mm, ry = ry)
 }
 
 #' Run one full imputation chain (one of the `m` imputations)
@@ -243,6 +276,7 @@ net_diagnostics <- function(mat) {
                            ry_vars,
                            ry_nets,
                            structural,
+                           net_dependence,
                            vm_names,
                            net_missing_names,
                            method,
@@ -265,6 +299,9 @@ net_diagnostics <- function(mat) {
   for (nm in net_missing_names) {
     cur_mats[[nm]] <- .init_fill_matrix(cur_mats[[nm]], structural[[nm]])
   }
+  # random init fills may violate the network-dependence rules; re-zero the
+  # determined cells so every chain starts from a consistent state
+  cur_mats <- .enforce_dependence(cur_mats, net_dependence, ry_nets)$mats
 
   targets <- sample(c(vm_names, net_missing_names))
 
@@ -287,7 +324,8 @@ net_diagnostics <- function(mat) {
       cat(" imputation", im, "- iter", it, "- order:",
           paste(targets, collapse = " -> "), "\n")
     }
-    for (tgt in targets) {
+    for (tgt in targets) .visit_context(
+      sprintf("target '%s' (iteration %d, imputation %d)", tgt, it, im), {
       if (tgt %in% vm_names) {
         v <- tgt
         ry <- ry_vars[[v]]
@@ -323,12 +361,13 @@ net_diagnostics <- function(mat) {
         net_feats_df <- do.call(cbind, net_feats_list)
         auto_x <- .clean_predictor_matrix(
           cbind(.prep_pca_matrix(other_data), .prep_pca_matrix(net_feats_df)),
-          max_cols = .safe_max_cols(sum(ry))
+          max_cols = .safe_max_cols(sum(ry)),
+          ry = ry
         )
 
         if (!is.null(model_map[[v]])) {
           combined_df <- cbind(other_data, net_feats_df)
-          extra <- .model_extra_terms(model_map[[v]], combined_df)
+          extra <- .model_extra_terms(model_map[[v]], combined_df, ry = ry)
           x <- cbind(auto_x, extra)
           x <- x[, !duplicated(colnames(x)), drop = FALSE]
         } else {
@@ -361,6 +400,19 @@ net_diagnostics <- function(mat) {
 
       } else {
         k <- match(tgt, net_names)
+        # cells determined 0 by the network-dependence rules given the
+        # partners' CURRENT state are treated exactly like structural cells
+        # for this visit: fixed at 0, not fit on, never imputed. The mask is
+        # re-evaluated here every visit because the partners are themselves
+        # re-imputed as the chain progresses.
+        dep_mask <- .dependence_zero_mask(cur_mats, net_dependence, tgt)
+        struct_eff <- structural[[tgt]]
+        if (!is.null(dep_mask)) {
+          stale <- dep_mask & !ry_nets[[tgt]] & cur_mats[[tgt]] != 0
+          if (any(stale)) cur_mats[[tgt]][stale] <- 0
+          struct_eff <- if (is.null(struct_eff)) dep_mask else
+            (struct_eff | dep_mask)
+        }
         # structural cells of the target never enter the dyad data: they are
         # not fit on (no zero inflation) and never receive imputed values
         built <- .build_dyad_data(cur_mats,
@@ -369,7 +421,7 @@ net_diagnostics <- function(mat) {
                                   attr_types = attr_types,
                                   other_net_predictors = other_net_predictors,
                                   n_components = n_components,
-                                  structural = structural[[tgt]])
+                                  structural = struct_eff)
         d <- built$data
         ry <- ry_nets[[tgt]][cbind(d$i, d$j)]
         # With a dyad random intercept the fixed `reciprocity` term (the
@@ -379,10 +431,11 @@ net_diagnostics <- function(mat) {
         drop_cols <- c("i", "j", "y",
                        if ("dyad" %in% net_random_intercepts) "reciprocity")
         auto_x <- .clean_predictor_matrix(d[setdiff(names(d), drop_cols)],
-                                           max_cols = .safe_max_cols(sum(ry)))
+                                           max_cols = .safe_max_cols(sum(ry)),
+                                           ry = ry)
 
         if (!is.null(model_map[[tgt]])) {
-          extra <- .model_extra_terms(model_map[[tgt]], d)
+          extra <- .model_extra_terms(model_map[[tgt]], d, ry = ry)
           x <- cbind(auto_x, extra)
           x <- x[, !duplicated(colnames(x)), drop = FALSE]
         } else {
@@ -408,8 +461,17 @@ net_diagnostics <- function(mat) {
         mis_idx <- which(!ry)
         cur_mats[[tgt]][cbind(d$i[mis_idx], d$j[mis_idx])] <- imp_vals
         cur_gs[[tgt]] <- .mat_to_igraph(cur_mats[[tgt]])
+        # freshly imputed ties may newly determine cells of dependent
+        # networks; propagate so the current state always satisfies the rules
+        if (!is.null(net_dependence)) {
+          enf <- .enforce_dependence(cur_mats, net_dependence, ry_nets)
+          cur_mats <- enf$mats
+          for (nm2 in enf$changed) {
+            cur_gs[[nm2]] <- .mat_to_igraph(cur_mats[[nm2]])
+          }
+        }
       }
-    }
+    })
 
     ## ---- diagnostics (once per full sweep) ----
     for (v in vm_names) {
@@ -588,6 +650,36 @@ net_diagnostics <- function(mat) {
 #'   from the initialization donor pool, and removed from the dyad-level
 #'   regression rows whenever that network is the imputation target, so the
 #'   design-zeros cannot inflate the zeros of the working model.
+#' @param net_dependence `NULL` (default) or a named list with elements
+#'   `necessary` and/or `forbidden`, each a list of length-2 character
+#'   vectors of network names - *adaptive* structural constraints between
+#'   networks:
+#'   \describe{
+#'     \item{necessary}{`c("A", "B")` means a tie in A is required for a tie
+#'       in B ("if not A then not B"): B's ties can only exist where A
+#'       currently has a tie. Order matters - the first name is the
+#'       prerequisite (parent) network.}
+#'     \item{forbidden}{`c("A", "B")` means ties in A and B are mutually
+#'       exclusive ("if A then not B, if B then not A"). Order is
+#'       irrelevant.}
+#'   }
+#'   E.g. \code{list(necessary = list(c("interaction", "friendship")),
+#'   forbidden = list(c("friend_pos", "friend_neg")))}. Three things happen:
+#'   (1) before the chain, missing cells that are logically determined by
+#'   *observed* cells are deduced and filled (e.g. an observed tie in B
+#'   implies the missing tie in A is 1; an observed tie in A implies the
+#'   missing cell in a forbidden partner is 0) - deduced cells count as
+#'   observed and are never imputed; observed data that contradict a rule
+#'   raise an error. (2) whenever a constrained network is the imputation
+#'   target, its cells currently determined to be 0 by the partners' current
+#'   (possibly imputed) state are fixed at 0 and excluded from the working
+#'   model, exactly like `structural` cells - but re-evaluated at every
+#'   visit, since the partners are themselves re-imputed. (3) after every
+#'   network re-imputation the rules are propagated (non-observed cells of
+#'   dependent networks re-zeroed), so every completed network list
+#'   satisfies every rule. Deduction of *required* ties (necessary rule) is
+#'   only possible when the parent network is binary; for a weighted parent
+#'   those cells stay missing, with a warning.
 #' @param models Optional list/character vector of formula strings (or
 #'   formula objects), one per attribute/network you want a custom model
 #'   for - see Details. E.g.
@@ -602,8 +694,10 @@ net_diagnostics <- function(mat) {
 #'
 #' @return An object of class `"netmids"` with elements: `data`, `net_list`
 #'   (original, NA-preserving inputs, except that structurally absent cells
-#'   are fixed at 0), `m`, `maxit`, `method`, `donors`, `structural` (the
+#'   are fixed at 0 and cells deduced from `net_dependence` are filled),
+#'   `m`, `maxit`, `method`, `donors`, `structural` (the
 #'   per-network list of structural-zero matrices, or `NULL`),
+#'   `net_dependence` (the normalized rule list, or `NULL`),
 #'   `models`, `imp` (list of `m` completed attribute data.frames),
 #'   `imp_nets` (list of `m` lists of completed adjacency matrices),
 #'   `visit_orders` (the randomized target order used in each chain),
@@ -640,6 +734,7 @@ netmice <- function(data,
                     n_components = 3,
                     net_random_intercepts = NULL,
                     structural = NULL,
+                    net_dependence = NULL,
                     models = NULL,
                     ncores = 1L,
                     seed = NA,
@@ -682,6 +777,13 @@ netmice <- function(data,
   # dyad-level regression rows are built
   struct_list <- .validate_structural(structural, net_names, n)
   mats0 <- .apply_structural_zeros(mats0, struct_list)
+
+  # adaptive structural constraints between networks: validate the rules,
+  # error on observed contradictions, and fill missing cells already
+  # determined by observed cells - the filled cells then count as observed
+  # (never imputed), exactly like structural zeros
+  dep_rules <- .validate_net_dependence(net_dependence, net_names)
+  mats0 <- .deduce_from_dependence(mats0, dep_rules)
 
   attr_types <- .resolve_attr_types(data, attr_types)
   var_levels <- lapply(data, function(x) if (
@@ -735,6 +837,7 @@ netmice <- function(data,
       ry_vars = ry_vars,
       ry_nets = ry_nets,
       structural = struct_list,
+      net_dependence = dep_rules,
       vm_names = vm_names,
       net_missing_names = net_missing_names,
       method = method,
@@ -803,6 +906,7 @@ netmice <- function(data,
       donors = donors,
       net_random_intercepts = net_random_intercepts,
       structural = struct_list,
+      net_dependence = dep_rules,
       models = model_map,
       ncores = ncores,
       imp = imp_data,

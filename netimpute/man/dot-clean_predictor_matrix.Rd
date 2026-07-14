@@ -5,7 +5,7 @@
 \title{Clean an auto-generated predictor matrix for PMM, and - if `max_cols` is
 given and exceeded - collapse it to `max_cols` principal components.}
 \usage{
-.clean_predictor_matrix(x, max_cols = NULL)
+.clean_predictor_matrix(x, max_cols = NULL, ry = NULL)
 }
 \description{
 This exists because the auto-generated predictor sets can plausibly
@@ -21,5 +21,18 @@ here keeps p comfortably below n by construction, the same fix already
 offered explicitly via net_predictors(output = "pca") - just applied
 automatically inside the imputation loop where the user has no direct
 control over the predictor count.
+}
+\details{
+`ry` (the observed-response indicator) matters because the model is fit
+on the observed rows only: a column can vary over all rows yet be
+constant on the observed subset (e.g. another network's ties that occur
+only on dyads where the target is missing). Such a column adds nothing to
+the fit, and when it is constant *zero* mice's ridge penalty
+(ridge * diag(X'X)) is zero for it, so solve() crashes with "system is
+exactly singular" instead of being rescued - hence constant-on-observed
+columns are dropped here. The PCA branch needs the analogous guard:
+components beyond the input matrix's true rank have (numerically) zero
+scores everywhere and crash the same way, so components are capped at the
+effective rank and re-checked against `ry`.
 }
 \keyword{internal}

@@ -15,6 +15,7 @@
   ry_vars,
   ry_nets,
   structural,
+  net_dependence,
   vm_names,
   net_missing_names,
   method,

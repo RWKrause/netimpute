@@ -5,7 +5,7 @@
 \title{Build extra (formula-specified) predictor columns, NA-safe and
 intercept-free, for cbind-ing onto the auto-generated predictor matrix.}
 \usage{
-.model_extra_terms(formula, data)
+.model_extra_terms(formula, data, ry = NULL)
 }
 \description{
 Build extra (formula-specified) predictor columns, NA-safe and

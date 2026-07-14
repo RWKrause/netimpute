@@ -17,6 +17,7 @@ netmice(
   n_components = 3,
   net_random_intercepts = NULL,
   structural = NULL,
+  net_dependence = NULL,
   models = NULL,
   ncores = 1L,
   seed = NA,
@@ -102,6 +103,37 @@ from the initialization donor pool, and removed from the dyad-level
 regression rows whenever that network is the imputation target, so the
 design-zeros cannot inflate the zeros of the working model.}
 
+\item{net_dependence}{`NULL` (default) or a named list with elements
+`necessary` and/or `forbidden`, each a list of length-2 character
+vectors of network names - *adaptive* structural constraints between
+networks:
+\describe{
+  \item{necessary}{`c("A", "B")` means a tie in A is required for a tie
+    in B ("if not A then not B"): B's ties can only exist where A
+    currently has a tie. Order matters - the first name is the
+    prerequisite (parent) network.}
+  \item{forbidden}{`c("A", "B")` means ties in A and B are mutually
+    exclusive ("if A then not B, if B then not A"). Order is
+    irrelevant.}
+}
+E.g. \code{list(necessary = list(c("interaction", "friendship")),
+forbidden = list(c("friend_pos", "friend_neg")))}. Three things happen:
+(1) before the chain, missing cells that are logically determined by
+*observed* cells are deduced and filled (e.g. an observed tie in B
+implies the missing tie in A is 1; an observed tie in A implies the
+missing cell in a forbidden partner is 0) - deduced cells count as
+observed and are never imputed; observed data that contradict a rule
+raise an error. (2) whenever a constrained network is the imputation
+target, its cells currently determined to be 0 by the partners' current
+(possibly imputed) state are fixed at 0 and excluded from the working
+model, exactly like `structural` cells - but re-evaluated at every
+visit, since the partners are themselves re-imputed. (3) after every
+network re-imputation the rules are propagated (non-observed cells of
+dependent networks re-zeroed), so every completed network list
+satisfies every rule. Deduction of *required* ties (necessary rule) is
+only possible when the parent network is binary; for a weighted parent
+those cells stay missing, with a warning.}
+
 \item{models}{Optional list/character vector of formula strings (or
 formula objects), one per attribute/network you want a custom model
 for - see Details. E.g.
@@ -120,8 +152,10 @@ order) as in `mice`.}
 \value{
 An object of class `"netmids"` with elements: `data`, `net_list`
   (original, NA-preserving inputs, except that structurally absent cells
-  are fixed at 0), `m`, `maxit`, `method`, `donors`, `structural` (the
+  are fixed at 0 and cells deduced from `net_dependence` are filled),
+  `m`, `maxit`, `method`, `donors`, `structural` (the
   per-network list of structural-zero matrices, or `NULL`),
+  `net_dependence` (the normalized rule list, or `NULL`),
   `models`, `imp` (list of `m` completed attribute data.frames),
   `imp_nets` (list of `m` lists of completed adjacency matrices),
   `visit_orders` (the randomized target order used in each chain),
