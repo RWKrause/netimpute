@@ -1,5 +1,5 @@
 # Node-level, attribute-scale-appropriate homophily/alter-similarity measures.
-# Shared by net_measures_core() and net_measures_full() so both functions use
+# This is the "homophily" block of net_measures(), so every measure set uses
 # exactly the same definitions.
 
 #' Integer neighbor lists for all vertices in one igraph call

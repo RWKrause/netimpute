@@ -1,7 +1,7 @@
 #' Build node-level predictors (raw measures and/or PCA components) across a
 #' list of networks
 #'
-#' Applies \code{\link{net_measures_core}} or \code{\link{net_measures_full}}
+#' Applies \code{\link{net_measures}} (with the requested `measure_set`)
 #' to each network/attribute pair in `net_list`/`attr_list`, stacks the
 #' results, and optionally reduces the stacked measures to principal
 #' components suitable as auxiliary predictors in a multiple-imputation model
@@ -34,8 +34,11 @@
 #'   `net_list`, sharing the same column names/types ("the same attribute set").
 #' @param attr_types Optional named character vector overriding auto-detected
 #'   attribute types, applied to every network.
-#' @param measure_set Either "core" (\code{\link{net_measures_core}}) or
-#'   "full" (\code{\link{net_measures_full}}).
+#' @param measure_set Which network measures to compute, passed to
+#'   \code{\link{net_measures}}: any combination of "core", "full",
+#'   "homophily", and individual measure names (named sets and single
+#'   measures are unioned, e.g. \code{c("core", "total_degree")}). Default
+#'   "core".
 #' @param output One of "measures", "pca", "both" - see Details.
 #' @param n_components Number of principal components to keep (default 5).
 #' @param keep_vars Character vector of raw measure column names to preserve
@@ -78,7 +81,7 @@
 net_predictors <- function(net_list,
                            attr_list,
                            attr_types = NULL,
-                           measure_set = c("core", "full"),
+                           measure_set = "core",
                            output = c("measures", "pca", "both"),
                            n_components = 5,
                            keep_vars = NULL,
@@ -87,7 +90,7 @@ net_predictors <- function(net_list,
                            scale_pca = TRUE,
                            id_col = NULL,
                            use_sna = TRUE) {
-  measure_set <- match.arg(measure_set)
+  measure_set <- .resolve_measure_set(measure_set)
   output <- match.arg(output)
   impute_na <- match.arg(impute_na)
 
@@ -108,15 +111,10 @@ net_predictors <- function(net_list,
   net_ids <- names(net_list)
   if (is.null(net_ids)) net_ids <- as.character(seq_along(net_list))
 
-  measure_fn <- if (measure_set == "full") net_measures_full else net_measures_core
-
   measures_list <- Map(function(net, attrs, nid) {
-    args <- list(net = net,
-                 attributes = attrs,
-                 attr_types = attr_types,
-                 id_col = id_col)
-    if (measure_set == "full") args$use_sna <- use_sna
-    out <- do.call(measure_fn, args)
+    out <- net_measures(net, attrs, measure_set = measure_set,
+                        attr_types = attr_types, id_col = id_col,
+                        use_sna = use_sna)
     out$network_id <- nid
     out
   }, net_list, attr_list, net_ids)

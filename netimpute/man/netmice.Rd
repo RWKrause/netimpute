@@ -11,7 +11,7 @@ netmice(
   maxit = 20,
   method = "pmm",
   donors = 5,
-  measure_set = c("core", "full"),
+  measure_set = "core",
   attr_types = NULL,
   other_net_predictors = c("raw", "pca"),
   n_components = 3,
@@ -50,8 +50,14 @@ have to impose an arbitrary numeric ordering on the categories.}
 
 \item{donors}{Number of PMM donors (default 5).}
 
-\item{measure_set}{"core" (default, faster) or "full" - which
-network-measure function supplies predictors for attribute imputation.}
+\item{measure_set}{Which network measures supply predictors for attribute
+imputation, passed to \code{\link{net_measures}}: any combination of
+"core" (default, faster), "full", "homophily", and individual measure
+names - named sets and single measures are unioned, e.g.
+\code{c("core", "total_degree")}. Note the "homophily" block (part of
+both "core" and "full") supplies the alter-composition predictors that
+carry homophily/influence signal; dropping it by selecting structural
+measures only will typically weaken attribute imputation.}
 
 \item{attr_types}{Optional named attribute-type overrides.}
 
@@ -134,8 +140,8 @@ missingness is visited exactly once, in a single interleaved sequence
 whose order is randomized independently for each of the `m` imputation
 chains (see Details). Each attribute is imputed conditional on the other
 attributes and on network-derived predictors from whichever networks were
-most recently updated (via \code{\link{net_measures_core}}/
-\code{\link{net_measures_full}}) - including the alter-composition
+most recently updated (via \code{\link{net_measures}} with the requested
+`measure_set`) - including the alter-composition
 homophily measures of the target attribute itself (e.g. the mean of the
 attribute among a node's alters, overall and over incoming/outgoing ties
 separately), which are functions of other nodes' values and typically

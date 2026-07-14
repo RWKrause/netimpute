@@ -2,7 +2,9 @@
 #'
 #' Computes a compact, low-collinearity set of node-level measures
 #' (see Details) plus attribute-scale-appropriate homophily/alter-similarity
-#' measures for every column in `attributes`.
+#' measures for every column in `attributes`. Equivalent to
+#' \code{\link{net_measures}} with `measure_set = "core"`; use
+#' \code{net_measures()} directly to add or select individual measures.
 #'
 #' Structural measures returned:
 #' \itemize{
@@ -59,34 +61,6 @@
 #' )
 #' head(net_measures_core(g, attrs))
 net_measures_core <- function(net, attributes, attr_types = NULL, id_col = NULL) {
-  g <- .as_igraph(net)
-  attributes <- .align_attributes(g, attributes, id_col = id_col)
-  directed <- igraph::is_directed(g)
-  n <- igraph::vcount(g)
-
-  recip <- .dyad_reciprocity(g)
-  adj_w <- as.matrix(igraph::as_adjacency_matrix(
-    g, sparse = FALSE,
-    attr = if ("weight" %in% igraph::edge_attr_names(g)) "weight" else NULL
-  ))
-  weighted <- .is_weighted_mat(adj_w)
-
-  structural <- data.frame(
-    node_id            = if (!is.null(igraph::V(g)$name)) igraph::V(g)$name else seq_len(n),
-    outdegree          = igraph::degree(g, mode = "out"),
-    indegree           = igraph::degree(g, mode = "in"),
-    reciprocity_ratio  = recip$reciprocity_ratio,
-    bonacich_power     = .bonacich_power(g),
-    betweenness        = igraph::betweenness(g, directed = directed, normalized = TRUE),
-    isolate            = igraph::degree(g, mode = "all") == 0,
-    constraint         = as.numeric(igraph::constraint(g)),
-    harmonic_closeness = igraph::harmonic_centrality(g, mode = "all", normalized = TRUE),
-    local_clustering   = if (weighted) .weighted_local_clustering(g) else
-      igraph::transitivity(g, type = "local", isolates = "zero"),
-    stringsAsFactors = FALSE
-  )
-
-  homophily <- .homophily_block(g, attributes, attr_types)
-
-  cbind(structural, homophily)
+  net_measures(net, attributes, measure_set = "core",
+               attr_types = attr_types, id_col = id_col)
 }

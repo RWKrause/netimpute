@@ -37,7 +37,9 @@ A data.frame with one row per node, `node_id` followed by all
 Computes the full battery of node-level structural measures (the
 superset of \code{\link{net_measures_core}}) plus, for every column of
 `attributes`, the same attribute-scale-appropriate homophily/alter
-measures used by \code{net_measures_core}.
+measures used by \code{net_measures_core}. Equivalent to
+\code{\link{net_measures}} with `measure_set = "full"`; use
+\code{net_measures()} directly to select individual measures.
 }
 \details{
 Structural measures returned (all self-contained via igraph unless noted):

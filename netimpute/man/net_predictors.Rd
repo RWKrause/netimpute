@@ -9,7 +9,7 @@ net_predictors(
   net_list,
   attr_list,
   attr_types = NULL,
-  measure_set = c("core", "full"),
+  measure_set = "core",
   output = c("measures", "pca", "both"),
   n_components = 5,
   keep_vars = NULL,
@@ -30,8 +30,11 @@ optionally named - names are carried through as `network_id`.}
 \item{attr_types}{Optional named character vector overriding auto-detected
 attribute types, applied to every network.}
 
-\item{measure_set}{Either "core" (\code{\link{net_measures_core}}) or
-"full" (\code{\link{net_measures_full}}).}
+\item{measure_set}{Which network measures to compute, passed to
+\code{\link{net_measures}}: any combination of "core", "full",
+"homophily", and individual measure names (named sets and single
+measures are unioned, e.g. \code{c("core", "total_degree")}). Default
+"core".}
 
 \item{output}{One of "measures", "pca", "both" - see Details.}
 
@@ -65,7 +68,7 @@ If `output = "pca"` or `"both"`: a list with
 }
 }
 \description{
-Applies \code{\link{net_measures_core}} or \code{\link{net_measures_full}}
+Applies \code{\link{net_measures}} (with the requested `measure_set`)
 to each network/attribute pair in `net_list`/`attr_list`, stacks the
 results, and optionally reduces the stacked measures to principal
 components suitable as auxiliary predictors in a multiple-imputation model

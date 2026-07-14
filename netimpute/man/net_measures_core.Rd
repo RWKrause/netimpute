@@ -26,7 +26,9 @@ A data.frame with one row per node: a `node_id` column followed by
 \description{
 Computes a compact, low-collinearity set of node-level measures
 (see Details) plus attribute-scale-appropriate homophily/alter-similarity
-measures for every column in `attributes`.
+measures for every column in `attributes`. Equivalent to
+\code{\link{net_measures}} with `measure_set = "core"`; use
+\code{net_measures()} directly to add or select individual measures.
 }
 \details{
 Structural measures returned:

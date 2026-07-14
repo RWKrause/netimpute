@@ -5,7 +5,7 @@
 # imputation chain m) - not "all attributes then all networks" - so that
 # whichever was updated most recently (whether that was an attribute or a
 # network) always feeds into the next target's predictors. Network-derived
-# predictors for an attribute (net_measures_core()/full()) and
+# predictors for an attribute (net_measures()) and
 # attribute-derived predictors for a network (dyad_regression()'s terms) are
 # therefore recomputed from scratch at every visit, never cached. The
 # univariate imputation step is dispatched through .impute_univariate() so
@@ -309,8 +309,8 @@ net_diagnostics <- function(mat) {
         # of the same name) - with a single, non-colliding network, bare
         # names like "indegree" are unambiguous and nicer to use in `models`.
         net_feats_list <- lapply(seq_along(cur_gs), function(k) {
-          fn <- if (measure_set == "full") net_measures_full else net_measures_core
-          out <- fn(cur_gs[[k]], cur_data, attr_types = attr_types)
+          out <- net_measures(cur_gs[[k]], cur_data, measure_set = measure_set,
+                              attr_types = attr_types)
           out <- out[setdiff(names(out), c("node_id", ego_feats))]
           if (length(net_names) > 1) {
             names(out) <- paste0(net_names[k], "_", names(out))
@@ -443,8 +443,8 @@ net_diagnostics <- function(mat) {
 #' whose order is randomized independently for each of the `m` imputation
 #' chains (see Details). Each attribute is imputed conditional on the other
 #' attributes and on network-derived predictors from whichever networks were
-#' most recently updated (via \code{\link{net_measures_core}}/
-#' \code{\link{net_measures_full}}) - including the alter-composition
+#' most recently updated (via \code{\link{net_measures}} with the requested
+#' `measure_set`) - including the alter-composition
 #' homophily measures of the target attribute itself (e.g. the mean of the
 #' attribute among a node's alters, overall and over incoming/outgoing ties
 #' separately), which are functions of other nodes' values and typically
@@ -541,8 +541,14 @@ net_diagnostics <- function(mat) {
 #'   `method` - a linear-model-based method like `"pmm"` would otherwise
 #'   have to impose an arbitrary numeric ordering on the categories.
 #' @param donors Number of PMM donors (default 5).
-#' @param measure_set "core" (default, faster) or "full" - which
-#'   network-measure function supplies predictors for attribute imputation.
+#' @param measure_set Which network measures supply predictors for attribute
+#'   imputation, passed to \code{\link{net_measures}}: any combination of
+#'   "core" (default, faster), "full", "homophily", and individual measure
+#'   names - named sets and single measures are unioned, e.g.
+#'   \code{c("core", "total_degree")}. Note the "homophily" block (part of
+#'   both "core" and "full") supplies the alter-composition predictors that
+#'   carry homophily/influence signal; dropping it by selecting structural
+#'   measures only will typically weaken attribute imputation.
 #' @param attr_types Optional named attribute-type overrides.
 #' @param other_net_predictors,n_components Passed to
 #'   \code{\link{dyad_regression}}'s dyad-data builder for the "other
@@ -628,7 +634,7 @@ netmice <- function(data,
                     m = 5, maxit = 20,
                     method = "pmm",
                     donors = 5,
-                    measure_set = c("core", "full"),
+                    measure_set = "core",
                     attr_types = NULL,
                     other_net_predictors = c("raw", "pca"),
                     n_components = 3,
@@ -640,7 +646,7 @@ netmice <- function(data,
                     printFlag = TRUE) {
 
   method <- match.arg(method, choices = "pmm")
-  measure_set <- match.arg(measure_set)
+  measure_set <- .resolve_measure_set(measure_set)
   other_net_predictors <- match.arg(other_net_predictors)
   if (!is.null(net_random_intercepts)) {
     net_random_intercepts <- match.arg(net_random_intercepts,
