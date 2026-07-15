@@ -5,7 +5,7 @@
 \title{Clean an auto-generated predictor matrix for PMM, and - if `max_cols` is
 given and exceeded - collapse it to `max_cols` principal components.}
 \usage{
-.clean_predictor_matrix(x, max_cols = NULL, ry = NULL)
+.clean_predictor_matrix(x, max_cols = NULL, ry = NULL, keep_raw = NULL)
 }
 \description{
 This exists because the auto-generated predictor sets can plausibly
@@ -34,5 +34,12 @@ columns are dropped here. The PCA branch needs the analogous guard:
 components beyond the input matrix's true rank have (numerically) zero
 scores everywhere and crash the same way, so components are capped at the
 effective rank and re-checked against `ry`.
+
+`keep_raw` names columns that must never be absorbed into the PCA: they
+are exempted from the reduction and appended unchanged (still subject to
+the NA-fill and constant-column screens). Used for a network target's own
+endogenous terms (`reciprocity`, `twopath`) and the cross-network
+dyad terms (`*_tie`, `*_recip`), whose named coefficients carry
+substantive dependence structure that a composite component would dilute.
 }
 \keyword{internal}

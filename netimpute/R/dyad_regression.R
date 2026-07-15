@@ -1,7 +1,7 @@
 # Cell-level (dyadic) regression: vectorize adjacency matrices and regress a
 # target network's ties on ego/alter/(diff|same) nodal-attribute terms,
-# reciprocity, two-path count, and terms derived from all other networks in
-# the list. This is the point estimate ("MR-QAP without the permutation
+# reciprocity, a two-path indicator, and terms derived from all other
+# networks in the list. This is the point estimate ("MR-QAP without the permutation
 # test") used both standalone and as the workhorse inside netmice().
 #
 # IMPORTANT: because a missing tie has no natural representation in an
@@ -187,18 +187,27 @@
   pca_model <- NULL
   if (length(other_predictors)) {
     if (other_net_predictors == "pca") {
-      om <- as.matrix(as.data.frame(other_predictors))
-      om[is.na(om)] <- 0
-      var0 <- apply(om, 2, stats::var)
-      om <- om[, is.finite(var0) & var0 > 0, drop = FALSE]
-      if (ncol(om) > 0) {
-        k_comp <- min(n_components, ncol(om))
-        pca_model <- stats::prcomp(om, center = TRUE, scale. = TRUE)
-        comps <- as.data.frame(pca_model$x[, seq_len(k_comp), drop = FALSE])
-        names(comps) <- paste0("other_net_PC", seq_len(k_comp))
-        other_predictors <- as.list(comps)
-      } else {
-        other_predictors <- list()
+      # The dyad-level cross-network terms (the other network's cell y_ij
+      # and its transpose y_ji) are NOT collapsed into components: x_ij
+      # being predicted by y_ij is exactly the cross-network association the
+      # model should carry as its own, named coefficient. Only the
+      # node-level degree terms are reduced to principal components.
+      dyadic <- grepl("_(tie|recip)$", names(other_predictors))
+      keep_list <- other_predictors[dyadic]
+      om_list <- other_predictors[!dyadic]
+      other_predictors <- keep_list
+      if (length(om_list)) {
+        om <- as.matrix(as.data.frame(om_list))
+        om[is.na(om)] <- 0
+        var0 <- apply(om, 2, stats::var)
+        om <- om[, is.finite(var0) & var0 > 0, drop = FALSE]
+        if (ncol(om) > 0) {
+          k_comp <- min(n_components, ncol(om))
+          pca_model <- stats::prcomp(om, center = TRUE, scale. = TRUE)
+          comps <- as.data.frame(pca_model$x[, seq_len(k_comp), drop = FALSE])
+          names(comps) <- paste0("other_net_PC", seq_len(k_comp))
+          other_predictors <- c(other_predictors, as.list(comps))
+        }
       }
     }
   }
@@ -207,7 +216,10 @@
     base,
     y = y,
     reciprocity = recip,
-    log_twopath = log1p(twopath),
+    # 0/1 indicator for at least one two-path i -> k -> j (at least one
+    # shared contact), not the raw count: a bounded closure term cannot be
+    # driven upward without limit by ties imputed in earlier sweeps
+    twopath = as.numeric(twopath > 0),
     as.data.frame(attr_predictors, check.names = FALSE),
     if (length(other_predictors)) as.data.frame(other_predictors,
                                                 check.names = FALSE) else NULL
@@ -222,7 +234,10 @@
 #'
 #' Regresses the vectorized off-diagonal cells of a target network on
 #' ego/alter/similarity terms for every nodal attribute, reciprocity (the
-#' transpose of the target network), the log number of two-paths, and terms
+#' transpose of the target network), a 0/1 indicator for the presence of at
+#' least one two-path i -> k -> j (`twopath` - "at least one shared
+#' contact"; deliberately bounded rather than a count, so imputed ties
+#' cannot push it upward without limit), and terms
 #' derived from every other network supplied (tie value, reciprocity,
 #' ego out-degree, alter in-degree). This is the point-estimate analogue of
 #' MR-QAP: the same predictor set and model, but fit once by OLS/GLM rather
@@ -246,8 +261,14 @@
 #'   tie-formation model), not for the PMM step inside \code{\link{netmice}},
 #'   which always uses a linear working model regardless of tie type.
 #' @param other_net_predictors "raw" (default) includes all four terms per
-#'   other network; "pca" replaces them with the first `n_components`
-#'   principal components, useful when many other networks are supplied.
+#'   other network; "pca" keeps the dyad-level cross-network terms
+#'   (`*_tie`, `*_recip`) as raw predictors and replaces only the node-level
+#'   degree terms (`*_ego_outdeg`, `*_alter_indeg`) with the first
+#'   `n_components` principal components, useful when many other networks
+#'   are supplied. The cross-network cell terms are never absorbed into
+#'   components: the target's `x_ij` being predicted by the other network's
+#'   `y_ij` is a substantive association that should keep its own
+#'   coefficient.
 #' @param n_components Number of PCA components when `other_net_predictors = "pca"`.
 #' @param structural `NULL` (default), one n x n logical matrix, or a named
 #'   list of n x n logical matrices (names matching networks in `net_list`).

@@ -11,7 +11,10 @@ test_that("dyad_regression: default args (gaussian family) fit and build correct
   expect_equal(family(res$model)$family, "gaussian")
   n <- nrow(nets$friends_bin)
   expect_equal(nrow(res$data), n * (n - 1))
-  expect_true(all(c("i", "j", "y", "reciprocity", "log_twopath") %in% names(res$data)))
+  expect_true(all(c("i", "j", "y", "reciprocity", "twopath") %in% names(res$data)))
+  # the two-path term is a 0/1 indicator ("at least one shared contact"),
+  # not a count
+  expect_true(all(res$data$twopath %in% c(0, 1)))
   expect_true(all(c("age_ego", "age_alter", "age_absdiff") %in% names(res$data)))
   expect_true(all(c("status_ego_inactive", "status_alter_inactive", "status_same") %in% names(res$data)) ||
                 all(c("status_ego_active", "status_alter_active", "status_same") %in% names(res$data)))
@@ -61,12 +64,17 @@ test_that("dyad_regression: family argument is honoured (binomial on a binary ta
   expect_equal(family(res$model)$family, "binomial")
 })
 
-test_that("dyad_regression: other_net_predictors = 'pca' replaces raw other-net terms with PCs", {
+test_that("dyad_regression: other_net_predictors = 'pca' reduces degree terms but keeps dyad-level cross-network terms raw", {
   extra <- fx_bin_directed(n = 20, seed = 999)
   res <- dyad_regression(list(friends = nets$friends_bin, advice = nets$advice_weighted, extra = extra),
                           attrs, target = "friends", other_net_predictors = "pca", n_components = 2)
   expect_true(all(paste0("other_net_PC", 1:2) %in% names(res$data)))
-  expect_false(any(c("advice_tie", "extra_tie") %in% names(res$data)))
+  # x_ij ~ y_ij (and y_ji) cross-network terms must survive as raw columns
+  expect_true(all(c("advice_tie", "extra_tie",
+                    "advice_recip", "extra_recip") %in% names(res$data)))
+  # only the node-level degree terms are absorbed into the components
+  expect_false(any(c("advice_ego_outdeg", "extra_ego_outdeg",
+                     "advice_alter_indeg", "extra_alter_indeg") %in% names(res$data)))
   expect_s3_class(res$pca_model, "prcomp")
 })
 
@@ -140,10 +148,13 @@ test_that("dyad_regression: warns when a dyad intercept is requested for an undi
   m <- nets$friends_bin
   m_undir <- ((m + t(m)) > 0) * 1
   # a degenerate dyad intercept on duplicated rows may also trigger lme4
-  # convergence warnings - collect everything and look for ours
+  # convergence warnings or even abort the fit outright ("Downdated VtV is
+  # not positive definite") - the warning under test is issued BEFORE the
+  # fit, so swallow a possible fit error and only assert the warning
   w <- capture_warnings(suppressMessages(
-    dyad_regression(list(friends = m_undir), attrs, target = "friends",
-                     random_intercepts = c("ego", "alter", "dyad"))
+    try(dyad_regression(list(friends = m_undir), attrs, target = "friends",
+                         random_intercepts = c("ego", "alter", "dyad")),
+        silent = TRUE)
   ))
   expect_true(any(grepl("undirected", w)))
 })

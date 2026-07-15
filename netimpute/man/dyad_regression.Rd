@@ -41,8 +41,14 @@ tie-formation model), not for the PMM step inside \code{\link{netmice}},
 which always uses a linear working model regardless of tie type.}
 
 \item{other_net_predictors}{"raw" (default) includes all four terms per
-other network; "pca" replaces them with the first `n_components`
-principal components, useful when many other networks are supplied.}
+other network; "pca" keeps the dyad-level cross-network terms
+(`*_tie`, `*_recip`) as raw predictors and replaces only the node-level
+degree terms (`*_ego_outdeg`, `*_alter_indeg`) with the first
+`n_components` principal components, useful when many other networks
+are supplied. The cross-network cell terms are never absorbed into
+components: the target's `x_ij` being predicted by the other network's
+`y_ij` is a substantive association that should keep its own
+coefficient.}
 
 \item{n_components}{Number of PCA components when `other_net_predictors = "pca"`.}
 
@@ -100,7 +106,10 @@ A list with `data` (dyad-level data.frame including `i`, `j`
 \description{
 Regresses the vectorized off-diagonal cells of a target network on
 ego/alter/similarity terms for every nodal attribute, reciprocity (the
-transpose of the target network), the log number of two-paths, and terms
+transpose of the target network), a 0/1 indicator for the presence of at
+least one two-path i -> k -> j (`twopath` - "at least one shared
+contact"; deliberately bounded rather than a count, so imputed ties
+cannot push it upward without limit), and terms
 derived from every other network supplied (tie value, reciprocity,
 ego out-degree, alter in-degree). This is the point-estimate analogue of
 MR-QAP: the same predictor set and model, but fit once by OLS/GLM rather

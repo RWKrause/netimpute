@@ -22,7 +22,8 @@
 }
 
 #' @keywords internal
-.init_fill_matrix <- function(mat, structural = NULL) {
+.init_fill_matrix <- function(mat, structural = NULL, init = c("zero", "sample")) {
+  init <- match.arg(init)
   diag(mat) <- 0
   off <- row(mat) != col(mat)
   # structurally absent cells are fixed zeros: they are neither filled nor
@@ -31,9 +32,18 @@
   if (!is.null(structural)) off <- off & !structural
   miss <- off & is.na(mat)
   if (any(miss)) {
-    obs_vals <- mat[off & !is.na(mat)]
-    if (!length(obs_vals)) stop("A network is entirely missing; cannot initialize imputation.", call. = FALSE)
-    mat[miss] <- sample(obs_vals, sum(miss), replace = TRUE)
+    if (init == "zero") {
+      # conservative start: every missing tie begins as "no tie", so the
+      # first sweep's endogenous predictors (reciprocity, two-paths, other
+      # networks' ties/degrees) are built from observed ties only, instead
+      # of from random fills that can seed a self-reinforcing surplus of
+      # imputed ties across iterations
+      mat[miss] <- 0
+    } else {
+      obs_vals <- mat[off & !is.na(mat)]
+      if (!length(obs_vals)) stop("A network is entirely missing; cannot initialize imputation.", call. = FALSE)
+      mat[miss] <- sample(obs_vals, sum(miss), replace = TRUE)
+    }
   }
   mat
 }
@@ -157,6 +167,123 @@ net_diagnostics <- function(mat) {
   }, numeric(1))
 }
 
+#' Sequential ("Gibbs") single-tie imputation for one network visit
+#'
+#' The ERGM-flavoured alternative to the simultaneous PMM tie update. A
+#' working model is fit once per visit on the observed dyads - logistic
+#' regression for a binary network, linear regression otherwise - and one
+#' coefficient vector is drawn from its asymptotic posterior (mirroring
+#' mice's Bayesian beta-draw, so between-imputation variability reflects
+#' estimation uncertainty). The missing cells are then visited ONE AT A TIME
+#' in random order; each cell's linear predictor is evaluated with the
+#' CURRENT values of the endogenous statistics - reciprocity (the transpose
+#' cell, read off the matrix, O(1)) and the two-path indicator (from a
+#' running two-path count matrix) - which are refreshed after every single
+#' draw via change statistics: toggling cell (i, j) only alters two-path
+#' counts of pairs running through i or j, i.e. two O(n) vector updates,
+#' never a full O(n^3) recomputation. A binary tie is drawn from
+#' Bernoulli(plogis(eta)); a weighted tie by PMM - the `donors` observed
+#' dyads with the closest fitted values donate one of their observed values
+#' at random (donor fitted values are taken at fit time and not re-refreshed
+#' during the sweep).
+#'
+#' Each draw therefore conditions on all previously imputed ties: this is
+#' exactly the full-conditional (Gibbs) update of an ERGM whose parameters
+#' were estimated by pseudo-likelihood, restricted to the missing cells
+#' (observed ties are never resampled). It removes the synchronous-update
+#' artifact of the simultaneous scheme, where every missing cell jumps
+#' together off the same stale snapshot of the statistics. Note it does not,
+#' by itself, rule out ERGM-style degeneracy - that is a property of the
+#' statistics; the bounded 0/1 `twopath` indicator is the main safeguard.
+#'
+#' All static (non-endogenous) predictor columns - attribute terms,
+#' other-network terms, any `models` extras, possibly PCA components - are
+#' evaluated once at visit start and held fixed during the sweep; only
+#' `reciprocity` and `twopath` are updated per draw.
+#'
+#' `check = TRUE` recomputes the binarized adjacency and the two-path count
+#' matrix from scratch at the end and errors if the incremental bookkeeping
+#' diverged - used by the unit tests, skipped in production calls.
+#' @keywords internal
+.impute_ties_gibbs <- function(d, ry, x, mat, binary, donors, check = FALSE) {
+  x <- as.matrix(x)
+  recip_col <- match("reciprocity", colnames(x))
+  twop_col  <- match("twopath", colnames(x))
+
+  # syntactic stand-in names: predictor columns may be PCA components or
+  # model.matrix terms with characters that formulas cannot carry verbatim
+  vnames <- if (ncol(x)) paste0("V", seq_len(ncol(x))) else character(0)
+  df <- stats::setNames(as.data.frame(x), vnames)
+  df$y <- d$y
+  fml <- if (length(vnames)) stats::reformulate(vnames, response = "y") else
+    stats::as.formula("y ~ 1")
+  fit <- if (binary) {
+    suppressWarnings(stats::glm(fml, data = df[ry, , drop = FALSE],
+                                family = stats::binomial()))
+  } else {
+    stats::lm(fml, data = df[ry, , drop = FALSE])
+  }
+  b <- stats::coef(fit)
+  ok <- !is.na(b)
+  Vc <- tryCatch(stats::vcov(fit), error = function(e) NULL)
+  if (!is.null(Vc)) {
+    Rch <- tryCatch(chol(Vc), error = function(e) NULL)
+    if (!is.null(Rch)) {
+      b[ok] <- b[ok] + drop(crossprod(Rch, stats::rnorm(nrow(Rch))))
+    }
+  }
+  b[!ok] <- 0  # aliased (rank-deficient) terms contribute nothing
+  intercept <- b[["(Intercept)"]]
+  beta_x <- b[vnames]
+
+  eta_all <- intercept + drop(x %*% beta_x)
+  b_recip <- if (!is.na(recip_col)) beta_x[[recip_col]] else 0
+  b_twop  <- if (!is.na(twop_col))  beta_x[[twop_col]]  else 0
+  # strip the endogenous contributions once; they are re-added per cell
+  # from the live matrix state inside the sweep
+  eta_base <- eta_all
+  if (!is.na(recip_col)) eta_base <- eta_base - b_recip * x[, recip_col]
+  if (!is.na(twop_col))  eta_base <- eta_base - b_twop  * x[, twop_col]
+
+  y_obs <- d$y[ry]
+  yhat_obs <- if (!binary) eta_all[ry] else NULL
+
+  B <- (mat != 0) * 1
+  Tp <- B %*% B  # two-path counts; maintained incrementally below
+
+  for (r in sample(which(!ry))) {
+    i <- d$i[r]
+    j <- d$j[r]
+    eta <- eta_base[r] + b_recip * mat[j, i] +
+      b_twop * as.numeric(Tp[i, j] > 0)
+    v <- if (binary) {
+      stats::rbinom(1, 1, stats::plogis(eta))
+    } else {
+      nn <- order(abs(yhat_obs - eta))[seq_len(min(donors, length(yhat_obs)))]
+      y_obs[nn][sample.int(length(nn), 1)]
+    }
+    if (v != mat[i, j]) {
+      mat[i, j] <- v
+      db <- as.numeric(v != 0) - B[i, j]
+      if (db != 0) {
+        # change statistics: B[i,j] enters Tp[a,b] = sum_k B[a,k] B[k,b]
+        # only as B[i,j]B[j,b] (row i) and B[a,i]B[i,j] (column j); the
+        # updates read row j / column i of B, which do not contain B[i,j],
+        # so their order is immaterial
+        Tp[i, ] <- Tp[i, ] + db * B[j, ]
+        Tp[, j] <- Tp[, j] + db * B[, i]
+        B[i, j] <- B[i, j] + db
+      }
+    }
+  }
+
+  if (check) {
+    stopifnot(isTRUE(all.equal(B, (mat != 0) * 1, check.attributes = FALSE)),
+              isTRUE(all.equal(Tp, B %*% B, check.attributes = FALSE)))
+  }
+  mat
+}
+
 #' Clean an auto-generated predictor matrix for PMM, and - if `max_cols` is
 #' given and exceeded - collapse it to `max_cols` principal components.
 #'
@@ -185,8 +312,16 @@ net_diagnostics <- function(mat) {
 #' components beyond the input matrix's true rank have (numerically) zero
 #' scores everywhere and crash the same way, so components are capped at the
 #' effective rank and re-checked against `ry`.
+#'
+#' `keep_raw` names columns that must never be absorbed into the PCA: they
+#' are exempted from the reduction and appended unchanged (still subject to
+#' the NA-fill and constant-column screens). Used for a network target's own
+#' endogenous terms (`reciprocity`, `twopath`) and the cross-network
+#' dyad terms (`*_tie`, `*_recip`), whose named coefficients carry
+#' substantive dependence structure that a composite component would dilute.
 #' @keywords internal
-.clean_predictor_matrix <- function(x, max_cols = NULL, ry = NULL) {
+.clean_predictor_matrix <- function(x, max_cols = NULL, ry = NULL,
+                                    keep_raw = NULL) {
   x <- as.matrix(x)
   x <- apply(x, 2, function(col) {
     if (all(is.na(col))) return(rep(0, length(col)))
@@ -205,9 +340,19 @@ net_diagnostics <- function(mat) {
   x <- keep_varying(x)
 
   if (!is.null(max_cols) && max_cols >= 1 && ncol(x) > max_cols) {
-    pca <- stats::prcomp(x, center = TRUE, scale. = TRUE)
-    n_comp <- min(max_cols, sum(pca$sdev > pca$sdev[1] * 1e-8))
-    x <- keep_varying(pca$x[, seq_len(n_comp), drop = FALSE])
+    keep_idx <- if (is.null(keep_raw) || is.null(colnames(x))) {
+      rep(FALSE, ncol(x))
+    } else {
+      colnames(x) %in% keep_raw
+    }
+    kept <- x[, keep_idx, drop = FALSE]
+    rest <- x[, !keep_idx, drop = FALSE]
+    if (ncol(rest) > max_cols) {
+      pca <- stats::prcomp(rest, center = TRUE, scale. = TRUE)
+      n_comp <- min(max_cols, sum(pca$sdev > pca$sdev[1] * 1e-8))
+      rest <- keep_varying(pca$x[, seq_len(n_comp), drop = FALSE])
+    }
+    x <- cbind(kept, rest)
   }
   x
 }
@@ -286,6 +431,9 @@ net_diagnostics <- function(mat) {
                            n_components,
                            net_random_intercepts,
                            model_map,
+                           net_init,
+                           net_update,
+                           net_binary,
                            maxit,
                            printFlag,
                            seed) {
@@ -297,7 +445,8 @@ net_diagnostics <- function(mat) {
     }
   cur_mats <- mats0
   for (nm in net_missing_names) {
-    cur_mats[[nm]] <- .init_fill_matrix(cur_mats[[nm]], structural[[nm]])
+    cur_mats[[nm]] <- .init_fill_matrix(cur_mats[[nm]], structural[[nm]],
+                                        init = net_init)
   }
   # random init fills may violate the network-dependence rules; re-zero the
   # determined cells so every chain starts from a consistent state
@@ -430,9 +579,16 @@ net_diagnostics <- function(mat) {
         # replaces it.
         drop_cols <- c("i", "j", "y",
                        if ("dyad" %in% net_random_intercepts) "reciprocity")
+        # the target's endogenous terms and the cross-network dyad terms
+        # keep their own coefficients even when the dimensionality
+        # safeguard collapses the rest to principal components
+        keep_raw <- c("reciprocity", "twopath",
+                      paste0(rep(setdiff(net_names, tgt), each = 2),
+                             c("_tie", "_recip")))
         auto_x <- .clean_predictor_matrix(d[setdiff(names(d), drop_cols)],
                                            max_cols = .safe_max_cols(sum(ry)),
-                                           ry = ry)
+                                           ry = ry,
+                                           keep_raw = keep_raw)
 
         if (!is.null(model_map[[tgt]])) {
           extra <- .model_extra_terms(model_map[[tgt]], d, ry = ry)
@@ -443,23 +599,32 @@ net_diagnostics <- function(mat) {
         }
 
         y <- d$y
-        if (length(net_random_intercepts)) {
-          imp_vals <- .impute_pmm_ranef(y = y,
-                                        ry = ry,
-                                        x = x,
-                                        donors = donors,
-                                        ego = d$i,
-                                        alter = d$j,
-                                        random_intercepts = net_random_intercepts)
+        if (net_update == "gibbs") {
+          cur_mats[[tgt]] <- .impute_ties_gibbs(d = d,
+                                                ry = ry,
+                                                x = x,
+                                                mat = cur_mats[[tgt]],
+                                                binary = net_binary[[tgt]],
+                                                donors = donors)
         } else {
-          imp_vals <- .impute_univariate(method,
-                                         y = y,
-                                         ry = ry,
-                                         x = x,
-                                         donors = donors)
+          if (length(net_random_intercepts)) {
+            imp_vals <- .impute_pmm_ranef(y = y,
+                                          ry = ry,
+                                          x = x,
+                                          donors = donors,
+                                          ego = d$i,
+                                          alter = d$j,
+                                          random_intercepts = net_random_intercepts)
+          } else {
+            imp_vals <- .impute_univariate(method,
+                                           y = y,
+                                           ry = ry,
+                                           x = x,
+                                           donors = donors)
+          }
+          mis_idx <- which(!ry)
+          cur_mats[[tgt]][cbind(d$i[mis_idx], d$j[mis_idx])] <- imp_vals
         }
-        mis_idx <- which(!ry)
-        cur_mats[[tgt]][cbind(d$i[mis_idx], d$j[mis_idx])] <- imp_vals
         cur_gs[[tgt]] <- .mat_to_igraph(cur_mats[[tgt]])
         # freshly imputed ties may newly determine cells of dependent
         # networks; propagate so the current state always satisfies the rules
@@ -614,8 +779,13 @@ net_diagnostics <- function(mat) {
 #' @param attr_types Optional named attribute-type overrides.
 #' @param other_net_predictors,n_components Passed to
 #'   \code{\link{dyad_regression}}'s dyad-data builder for the "other
-#'   networks" terms - "raw" (all terms) or "pca" (first `n_components`
-#'   components).
+#'   networks" terms - "raw" (all terms) or "pca" (dyad-level `*_tie`/
+#'   `*_recip` cross-network terms kept raw, node-level degree terms
+#'   reduced to the first `n_components` components). Neither mode ever
+#'   PCA-transforms the target network's own `reciprocity`/`twopath`
+#'   terms or the cross-network cell terms: those keep their own
+#'   coefficients even when the automatic dimensionality safeguard (see
+#'   Details) collapses the remaining predictors to components.
 #' @param net_random_intercepts `NULL` (default) or a character vector - any
 #'   of `"ego"`, `"alter"`, `"dyad"`. When set, the working model for
 #'   *network-tie* imputation is a linear mixed model fit with
@@ -684,6 +854,38 @@ net_diagnostics <- function(mat) {
 #'   formula objects), one per attribute/network you want a custom model
 #'   for - see Details. E.g.
 #'   `list("happiness ~ indegree + age + performance * gender")`.
+#' @param net_update How a network's missing cells are updated at each
+#'   visit. `"simultaneous"` (default; the behavior to date): one PMM
+#'   working model per visit imputes every missing cell at once, all from
+#'   the same snapshot of the endogenous statistics. `"gibbs"`: sequential
+#'   single-tie imputation - a working model is fit once per visit on the
+#'   observed dyads (logistic regression for a binary network, linear
+#'   regression otherwise), one coefficient vector is drawn from its
+#'   asymptotic posterior, and the missing cells are then visited one at a
+#'   time in random order, each draw using the *current* values of the
+#'   endogenous statistics (`reciprocity`, `twopath`), which are refreshed
+#'   after every single draw via change statistics (O(1) for reciprocity,
+#'   two O(n) vector updates on the running two-path count matrix - never a
+#'   full recomputation). Binary ties are drawn from
+#'   `Bernoulli(plogis(eta))`; weighted ties by PMM donor matching on the
+#'   fitted values. Each tie is thus drawn conditional on all previously
+#'   imputed ties - the full-conditional (Gibbs) update of an ERGM-style
+#'   model with pseudo-likelihood-estimated parameters, restricted to the
+#'   missing cells - which yields properly dependent within-network
+#'   imputations and avoids the synchronous-update artifact of the
+#'   simultaneous scheme. Static predictors (attribute terms, other-network
+#'   terms, `models` extras) are evaluated once per visit and held fixed
+#'   during the sweep. Not compatible with `net_random_intercepts`;
+#'   attribute imputation is unaffected.
+#' @param net_init How each chain initializes a network's missing cells
+#'   before the first sweep. `"zero"` (default) starts every missing tie at 0
+#'   ("no tie"), so the first sweep's endogenous predictors (reciprocity,
+#'   two-paths, other networks' tie/degree terms) are built from observed
+#'   ties only - a deliberately conservative start that biases the very
+#'   first sweep's structural terms downward but cannot seed a
+#'   self-reinforcing surplus of random initial ties. `"sample"` restores
+#'   the previous behavior of filling missing cells by resampling observed
+#'   off-diagonal values (marginal-density start).
 #' @param ncores Number of parallel workers for the `m` chains via
 #'   \pkg{future} (default 1 = sequential). See Details for the
 #'   installed-package requirement when `ncores > 1`.
@@ -695,7 +897,8 @@ net_diagnostics <- function(mat) {
 #' @return An object of class `"netmids"` with elements: `data`, `net_list`
 #'   (original, NA-preserving inputs, except that structurally absent cells
 #'   are fixed at 0 and cells deduced from `net_dependence` are filled),
-#'   `m`, `maxit`, `method`, `donors`, `structural` (the
+#'   `m`, `maxit`, `method`, `donors`, `net_init`, `net_update`,
+#'   `structural` (the
 #'   per-network list of structural-zero matrices, or `NULL`),
 #'   `net_dependence` (the normalized rule list, or `NULL`),
 #'   `models`, `imp` (list of `m` completed attribute data.frames),
@@ -736,17 +939,26 @@ netmice <- function(data,
                     structural = NULL,
                     net_dependence = NULL,
                     models = NULL,
+                    net_init = c("zero", "sample"),
+                    net_update = c("simultaneous", "gibbs"),
                     ncores = 1L,
                     seed = NA,
                     printFlag = TRUE) {
 
   method <- match.arg(method, choices = "pmm")
+  net_init <- match.arg(net_init)
+  net_update <- match.arg(net_update)
   measure_set <- .resolve_measure_set(measure_set)
   other_net_predictors <- match.arg(other_net_predictors)
   if (!is.null(net_random_intercepts)) {
     net_random_intercepts <- match.arg(net_random_intercepts,
                                        c("ego", "alter", "dyad"),
                                        several.ok = TRUE)
+  }
+  if (net_update == "gibbs" && length(net_random_intercepts)) {
+    stop("net_update = 'gibbs' is not compatible with `net_random_intercepts`: ",
+         "the sequential sampler uses its own logistic/linear working model. ",
+         "Use one or the other.", call. = FALSE)
   }
 
   data <- as.data.frame(data)
@@ -784,6 +996,13 @@ netmice <- function(data,
   # (never imputed), exactly like structural zeros
   dep_rules <- .validate_net_dependence(net_dependence, net_names)
   mats0 <- .deduce_from_dependence(mats0, dep_rules)
+
+  # binary networks get the Bernoulli draw under net_update = "gibbs";
+  # weighted ones fall back to sequential PMM donor matching
+  net_binary <- vapply(mats0, function(m) {
+    v <- m[!is.na(m)]
+    all(v %in% c(0, 1))
+  }, logical(1))
 
   attr_types <- .resolve_attr_types(data, attr_types)
   var_levels <- lapply(data, function(x) if (
@@ -847,6 +1066,9 @@ netmice <- function(data,
       n_components = n_components,
       net_random_intercepts = net_random_intercepts,
       model_map = model_map,
+      net_init = net_init,
+      net_update = net_update,
+      net_binary = net_binary,
       maxit = maxit,
       printFlag = printFlag,
       seed = seed
@@ -908,6 +1130,8 @@ netmice <- function(data,
       structural = struct_list,
       net_dependence = dep_rules,
       models = model_map,
+      net_init = net_init,
+      net_update = net_update,
       ncores = ncores,
       imp = imp_data,
       imp_nets = imp_nets,
@@ -941,6 +1165,10 @@ print.netmids <- function(x, ...) {
       "  Method:", x$method, "  Donors:", x$donors, "  Cores:", x$ncores, "\n")
   cat("Variables with missingness:", paste(x$var_missing, collapse = ", "), "\n")
   cat("Networks with missingness:", paste(x$net_missing, collapse = ", "), "\n")
+  if (identical(x$net_update, "gibbs")) {
+    cat("Network-tie updating: sequential Gibbs (single-tie draws with",
+        "change statistics)\n")
+  }
   if (length(x$net_random_intercepts)) {
     cat("Network-tie random intercepts (lme4):",
         paste(x$net_random_intercepts, collapse = ", "), "\n")

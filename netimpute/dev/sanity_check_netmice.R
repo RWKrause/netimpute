@@ -20,7 +20,7 @@ attrs <- data.frame(
 ## ---- dyad_regression(), raw other-network predictors ----------------------
 res_raw <- dyad_regression(list(friends = friends, advice = advice), attrs,
                             target = "friends", other_net_predictors = "raw")
-stopifnot(all(c("i", "j", "y", "reciprocity", "log_twopath") %in% names(res_raw$data)))
+stopifnot(all(c("i", "j", "y", "reciprocity", "twopath") %in% names(res_raw$data)))
 stopifnot(all(c("age_ego", "age_alter", "age_absdiff") %in% names(res_raw$data)))
 stopifnot(all(c("dept_ego_hr", "dept_ego_sales", "dept_alter_hr", "dept_alter_sales",
                 "dept_same") %in% names(res_raw$data)))

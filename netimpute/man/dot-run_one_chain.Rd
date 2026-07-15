@@ -25,6 +25,9 @@
   n_components,
   net_random_intercepts,
   model_map,
+  net_init,
+  net_update,
+  net_binary,
   maxit,
   printFlag,
   seed

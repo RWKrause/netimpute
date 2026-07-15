@@ -25,6 +25,25 @@ test_that(".clean_predictor_matrix PCA branch never returns rank-deficient colum
   expect_true(all(apply(out, 2, stats::var) > 1e-8))
 })
 
+test_that(".clean_predictor_matrix: keep_raw columns bypass the PCA reduction", {
+  set.seed(5)
+  x <- matrix(rnorm(100 * 10), 100, 10,
+              dimnames = list(NULL, c("reciprocity", "twopath", paste0("c", 1:8))))
+  out <- netimpute:::.clean_predictor_matrix(
+    x, max_cols = 4, keep_raw = c("reciprocity", "twopath"))
+  expect_true(all(c("reciprocity", "twopath") %in% colnames(out)))
+  # kept columns are passed through untransformed
+  expect_identical(out[, "reciprocity"], x[, "reciprocity"])
+  expect_identical(out[, "twopath"], x[, "twopath"])
+  # the remaining 8 columns are reduced to max_cols components
+  expect_equal(sum(grepl("^PC", colnames(out))), 4)
+  # keep_raw names absent from x are ignored, and without keep_raw the
+  # old everything-into-PCA behavior is unchanged
+  out2 <- netimpute:::.clean_predictor_matrix(x, max_cols = 4,
+                                              keep_raw = "no_such_column")
+  expect_equal(ncol(out2), 4)
+})
+
 test_that("netmice survives another network's ties living only on the target's missing dyads", {
   set.seed(3)
   n <- 30

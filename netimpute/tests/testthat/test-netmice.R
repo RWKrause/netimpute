@@ -65,6 +65,87 @@ test_that("netmice: attr_types override is honoured", {
   expect_false(anyNA(fit$imp[[1]]$dept))
 })
 
+test_that(".init_fill_matrix: 'zero' fills missing cells with 0, 'sample' resamples observed values", {
+  set.seed(6)
+  m <- matrix(rbinom(100, 1, 0.5), 10, 10); diag(m) <- 0
+  mis <- sample(which(row(m) != col(m)), 15)
+  m[mis] <- NA
+  z <- netimpute:::.init_fill_matrix(m, init = "zero")
+  expect_true(all(z[mis] == 0))
+  expect_identical(z[-mis], m[-mis])
+  s <- netimpute:::.init_fill_matrix(m, init = "sample")
+  expect_true(all(s[mis] %in% c(0, 1)))
+})
+
+test_that("netmice: net_init is honoured, defaults to 'zero', and is stored on the result", {
+  fx <- make_missing_fixture()
+  fit0 <- netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 3, printFlag = FALSE)
+  expect_equal(fit0$net_init, "zero")
+  fit_s <- netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 3,
+                   net_init = "sample", printFlag = FALSE)
+  expect_equal(fit_s$net_init, "sample")
+  expect_error(netmice(fx$attrs, fx$nets, m = 1, maxit = 1,
+                       net_init = "banana", printFlag = FALSE))
+})
+
+test_that(".impute_ties_gibbs: incremental change statistics match full recomputation", {
+  set.seed(11)
+  n <- 15
+  m <- matrix(rbinom(n * n, 1, 0.2), n, n); diag(m) <- 0
+  mis <- sample(which(row(m) != col(m)), 60)
+  m[mis] <- NA
+  attrs <- data.frame(age = rnorm(n), grade = rnorm(n))
+  filled <- netimpute:::.init_fill_matrix(m, init = "zero")
+  built <- suppressMessages(
+    netimpute:::.build_dyad_data(list(net = filled), attrs, 1))
+  d <- built$data
+  ry <- !is.na(m)[cbind(d$i, d$j)]
+  x <- netimpute:::.clean_predictor_matrix(
+    d[setdiff(names(d), c("i", "j", "y"))], ry = ry)
+  # check = TRUE recomputes B and the two-path count matrix from scratch at
+  # the end and stops if the O(n) per-draw updates diverged from them
+  out <- netimpute:::.impute_ties_gibbs(d = d, ry = ry, x = x, mat = filled,
+                                        binary = TRUE, donors = 5,
+                                        check = TRUE)
+  obs <- !is.na(m) & (row(m) != col(m))
+  expect_identical(out[obs], m[obs])       # observed ties never resampled
+  expect_true(all(out[mis] %in% c(0, 1)))  # Bernoulli draws are binary
+})
+
+test_that("netmice: net_update = 'gibbs' runs end to end (binary and weighted targets)", {
+  fx <- make_missing_fixture()
+  # give the weighted network missing cells too, to exercise the
+  # sequential-PMM fallback for non-binary ties
+  off <- which(row(fx$nets$advice) != col(fx$nets$advice))
+  advice_obs_vals <- fx$nets$advice[off]
+  mis_adv <- sample(off, 25)
+  fx$nets$advice[mis_adv] <- NA
+  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, net_update = "gibbs",
+                 seed = 7, printFlag = FALSE)
+  expect_s3_class(fit, "netmids")
+  expect_equal(fit$net_update, "gibbs")
+  friends_done <- fit$imp_nets[[1]]$friends
+  advice_done  <- fit$imp_nets[[1]]$advice
+  expect_false(anyNA(friends_done[off]))
+  expect_false(anyNA(advice_done[off]))
+  # binary target: Bernoulli draws
+  expect_true(all(friends_done %in% c(0, 1)))
+  # weighted target: PMM donor draws come from the observed value pool
+  expect_true(all(advice_done[mis_adv] %in% advice_obs_vals))
+  # observed cells are untouched
+  obs_f <- !is.na(fx$nets$friends)
+  expect_identical(friends_done[obs_f], fx$nets$friends[obs_f])
+})
+
+test_that("netmice: net_update = 'gibbs' rejects net_random_intercepts", {
+  fx <- make_missing_fixture()
+  expect_error(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 1, net_update = "gibbs",
+            net_random_intercepts = "ego", printFlag = FALSE),
+    "not compatible"
+  )
+})
+
 test_that("netmice: other_net_predictors = 'pca' runs end to end", {
   fx <- make_missing_fixture()
   fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, other_net_predictors = "pca",

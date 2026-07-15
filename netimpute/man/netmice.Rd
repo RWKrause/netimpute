@@ -19,6 +19,8 @@ netmice(
   structural = NULL,
   net_dependence = NULL,
   models = NULL,
+  net_init = c("zero", "sample"),
+  net_update = c("simultaneous", "gibbs"),
   ncores = 1L,
   seed = NA,
   printFlag = TRUE
@@ -64,8 +66,13 @@ measures only will typically weaken attribute imputation.}
 
 \item{other_net_predictors, n_components}{Passed to
 \code{\link{dyad_regression}}'s dyad-data builder for the "other
-networks" terms - "raw" (all terms) or "pca" (first `n_components`
-components).}
+networks" terms - "raw" (all terms) or "pca" (dyad-level `*_tie`/
+`*_recip` cross-network terms kept raw, node-level degree terms
+reduced to the first `n_components` components). Neither mode ever
+PCA-transforms the target network's own `reciprocity`/`twopath`
+terms or the cross-network cell terms: those keep their own
+coefficients even when the automatic dimensionality safeguard (see
+Details) collapses the remaining predictors to components.}
 
 \item{net_random_intercepts}{`NULL` (default) or a character vector - any
 of `"ego"`, `"alter"`, `"dyad"`. When set, the working model for
@@ -139,6 +146,40 @@ formula objects), one per attribute/network you want a custom model
 for - see Details. E.g.
 `list("happiness ~ indegree + age + performance * gender")`.}
 
+\item{net_init}{How each chain initializes a network's missing cells
+before the first sweep. `"zero"` (default) starts every missing tie at 0
+("no tie"), so the first sweep's endogenous predictors (reciprocity,
+two-paths, other networks' tie/degree terms) are built from observed
+ties only - a deliberately conservative start that biases the very
+first sweep's structural terms downward but cannot seed a
+self-reinforcing surplus of random initial ties. `"sample"` restores
+the previous behavior of filling missing cells by resampling observed
+off-diagonal values (marginal-density start).}
+
+\item{net_update}{How a network's missing cells are updated at each
+visit. `"simultaneous"` (default; the behavior to date): one PMM
+working model per visit imputes every missing cell at once, all from
+the same snapshot of the endogenous statistics. `"gibbs"`: sequential
+single-tie imputation - a working model is fit once per visit on the
+observed dyads (logistic regression for a binary network, linear
+regression otherwise), one coefficient vector is drawn from its
+asymptotic posterior, and the missing cells are then visited one at a
+time in random order, each draw using the *current* values of the
+endogenous statistics (`reciprocity`, `twopath`), which are refreshed
+after every single draw via change statistics (O(1) for reciprocity,
+two O(n) vector updates on the running two-path count matrix - never a
+full recomputation). Binary ties are drawn from
+`Bernoulli(plogis(eta))`; weighted ties by PMM donor matching on the
+fitted values. Each tie is thus drawn conditional on all previously
+imputed ties - the full-conditional (Gibbs) update of an ERGM-style
+model with pseudo-likelihood-estimated parameters, restricted to the
+missing cells - which yields properly dependent within-network
+imputations and avoids the synchronous-update artifact of the
+simultaneous scheme. Static predictors (attribute terms, other-network
+terms, `models` extras) are evaluated once per visit and held fixed
+during the sweep. Not compatible with `net_random_intercepts`;
+attribute imputation is unaffected.}
+
 \item{ncores}{Number of parallel workers for the `m` chains via
 \pkg{future} (default 1 = sequential). See Details for the
 installed-package requirement when `ncores > 1`.}
@@ -153,7 +194,8 @@ order) as in `mice`.}
 An object of class `"netmids"` with elements: `data`, `net_list`
   (original, NA-preserving inputs, except that structurally absent cells
   are fixed at 0 and cells deduced from `net_dependence` are filled),
-  `m`, `maxit`, `method`, `donors`, `structural` (the
+  `m`, `maxit`, `method`, `donors`, `net_init`, `net_update`,
+  `structural` (the
   per-network list of structural-zero matrices, or `NULL`),
   `net_dependence` (the normalized rule list, or `NULL`),
   `models`, `imp` (list of `m` completed attribute data.frames),
