@@ -4,7 +4,7 @@
 \alias{plot.netmids}
 \title{Plot convergence diagnostics for a \code{netmids} object}
 \usage{
-\method{plot}{netmids}(x, vars = NULL, nets = NULL, ask = interactive(), ...)
+\method{plot}{netmids}(x, vars = NULL, nets = NULL, ask = interactive(), max_rows = 4L, ...)
 }
 \arguments{
 \item{x}{A \code{netmids} object from \code{\link{netmice}}.}
@@ -20,6 +20,11 @@ iteration). Pass \code{character(0)} to skip the networks page.}
 
 \item{ask}{Logical; prompt before each page of plots (default: only when
 the session is interactive, as for other multi-page base R plots).}
+
+\item{max_rows}{Maximum number of grid rows per page (default 4). With
+many attributes or networks the plots are split across additional
+pages instead of being squeezed into ever-smaller panels (which
+eventually errors with "figure margins too large").}
 
 \item{...}{Passed on to the underlying \code{matplot()} calls.}
 }

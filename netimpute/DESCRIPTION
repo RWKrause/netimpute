@@ -4,22 +4,12 @@ Title: Node-Level Network Measures as Predictors for Multiple Imputation
 Version: 0.1.0
 Authors@R: c(
     person(
-      "Jane", "Doe",
-      email = "jane@example.com",
+      "Robert W.", "Krause",
+      email = "robert.w.krause@mailbox.org",
       role = c("aut", "cre")
     )
   )
-Description: Computes node-level social network measures (degree, reciprocity,
-    centrality, brokerage, closure, and attribute-scale-appropriate homophily
-    measures) across one or more networks sharing a common attribute schema,
-    and reduces them to principal components usable as auxiliary predictors
-    in a multiple-imputation model (e.g. mice with predictive mean matching),
-    while optionally preserving specific raw measures un-transformed when
-    they are themselves part of a substantive hypothesis. Also provides a
-    dyadic (cell-level) regression for network ties - an MR-QAP-style model
-    without the permutation test, since the goal is prediction rather than
-    inference - and a mice-style chained-equations routine, netmice(), that
-    jointly imputes missing nodal attributes and missing network ties.
+Description: Imputes networks and nodal attributes with multiple imputation by chained equations. Given a list of at least one network and one or more attributes, the package impute the missing network ties using network and attribute derived dyadic and nodal level features and imputes attributes using network feautures and attributes of network alters. The package can handle multiple networks and many attributes. If the amount of attriubtes and network feaures becomes too many, users can uce PCA to reduce the predictor set. Specific network predictors can be chosen from a list of 28 features and many attribute measures. Imptuation models can be directly defined, data driven, or rely on all available data. Interactions in imputation are possible, based on attributes, attribute-network interactions, or network features. Note that the package does create a lot of variables internally, therefore, please check the naming convention in the package to make sure that it does not clash with your variable names.
 License: GPL (>= 3)
 Encoding: UTF-8
 LazyData: true

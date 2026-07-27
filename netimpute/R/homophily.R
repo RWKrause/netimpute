@@ -91,6 +91,10 @@
     nb_out <- nb_lists$out[[i]]
     nb_in  <- nb_lists$`in`[[i]]
     nb_all <- nb_lists$all[[i]]
+    # min/max (unlike mean) return +/-Inf with a warning when every alter's
+    # value is NA - e.g. screening on pre-imputation data - so guard on
+    # having at least one non-NA alter value
+    any_all <- any(!is.na(x[nb_all]))
     c(
       diff_out       = if (length(nb_out)) mean(abs(x[i] - x[nb_out]),
                                                 na.rm = TRUE) else NA_real_,
@@ -102,10 +106,8 @@
                                                 na.rm = TRUE) else NA_real_,
       alter_mean_out = if (length(nb_out)) mean(x[nb_out],
                                                 na.rm = TRUE) else NA_real_,
-      alter_min      = if (length(nb_all)) min(x[nb_all],
-                                               na.rm = TRUE) else NA_real_,
-      alter_max      = if (length(nb_all)) max(x[nb_all],
-                                               na.rm = TRUE) else NA_real_
+      alter_min      = if (any_all) min(x[nb_all], na.rm = TRUE) else NA_real_,
+      alter_max      = if (any_all) max(x[nb_all], na.rm = TRUE) else NA_real_
     )
   })
   as.data.frame(do.call(rbind, rows))

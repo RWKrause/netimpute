@@ -18,8 +18,17 @@ test_that("dyad_regression: default args (gaussian family) fit and build correct
   expect_true(all(c("age_ego", "age_alter", "age_absdiff") %in% names(res$data)))
   expect_true(all(c("status_ego_inactive", "status_alter_inactive", "status_same") %in% names(res$data)) ||
                 all(c("status_ego_active", "status_alter_active", "status_same") %in% names(res$data)))
-  expect_true(all(c("advice_tie", "advice_recip", "advice_ego_outdeg", "advice_alter_indeg")
+  expect_true(all(c("advice_tie", "advice_recip",
+                    "advice_ego_outdeg", "advice_ego_indeg",
+                    "advice_alter_indeg", "advice_alter_outdeg")
                   %in% names(res$data)))
+  # the degree terms index the right node: ego terms are functions of i,
+  # alter terms of j
+  adv <- nets$advice_weighted
+  expect_equal(res$data$advice_ego_indeg,    colSums(adv)[res$data$i],
+               ignore_attr = TRUE)
+  expect_equal(res$data$advice_alter_outdeg, rowSums(adv)[res$data$j],
+               ignore_attr = TRUE)
 })
 
 test_that(".build_dyad_data: dyad-level values match a hand-built reference (ego = i, alter = j, same = shared category)", {
@@ -74,7 +83,10 @@ test_that("dyad_regression: other_net_predictors = 'pca' reduces degree terms bu
                     "advice_recip", "extra_recip") %in% names(res$data)))
   # only the node-level degree terms are absorbed into the components
   expect_false(any(c("advice_ego_outdeg", "extra_ego_outdeg",
-                     "advice_alter_indeg", "extra_alter_indeg") %in% names(res$data)))
+                     "advice_ego_indeg", "extra_ego_indeg",
+                     "advice_alter_indeg", "extra_alter_indeg",
+                     "advice_alter_outdeg", "extra_alter_outdeg")
+                   %in% names(res$data)))
   expect_s3_class(res$pca_model, "prcomp")
 })
 
@@ -176,7 +188,8 @@ test_that("dyad_regression: fit = FALSE builds data without fitting a model", {
 test_that("dyad_regression: works with a single network (no other-network terms)", {
   res <- dyad_regression(list(friends = nets$friends_bin), attrs, target = "friends")
   expect_s3_class(res$model, "glm")
-  expect_false(any(grepl("_tie$|_recip$|_ego_outdeg$|_alter_indeg$", names(res$data))))
+  expect_false(any(grepl("_tie$|_recip$|_ego_outdeg$|_ego_indeg$|_alter_indeg$|_alter_outdeg$",
+                         names(res$data))))
 })
 
 test_that("dyad_regression: rejects a signed network anywhere in net_list", {

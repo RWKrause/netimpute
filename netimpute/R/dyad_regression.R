@@ -181,7 +181,9 @@
     other_predictors[[paste0(onm, "_tie")]]          <- as.vector(mk)[keep]
     other_predictors[[paste0(onm, "_recip")]]        <- as.vector(t(mk))[keep]
     other_predictors[[paste0(onm, "_ego_outdeg")]]   <- outdeg_k[base$i]
+    other_predictors[[paste0(onm, "_ego_indeg")]]    <- indeg_k[base$i]
     other_predictors[[paste0(onm, "_alter_indeg")]]  <- indeg_k[base$j]
+    other_predictors[[paste0(onm, "_alter_outdeg")]] <- outdeg_k[base$j]
   }
 
   pca_model <- NULL
@@ -238,11 +240,39 @@
 #' least one two-path i -> k -> j (`twopath` - "at least one shared
 #' contact"; deliberately bounded rather than a count, so imputed ties
 #' cannot push it upward without limit), and terms
-#' derived from every other network supplied (tie value, reciprocity,
-#' ego out-degree, alter in-degree). This is the point-estimate analogue of
+#' derived from every other network supplied (tie value, reciprocity, and
+#' the sender's and receiver's out- and in-degrees in that network). This
+#' is the point-estimate analogue of
 #' MR-QAP: the same predictor set and model, but fit once by OLS/GLM rather
 #' than by permutation, since here the goal is prediction (for imputation)
 #' rather than a permutation-based significance test.
+#'
+#' @section Term names:
+#' The returned `data` (and hence the fitted model) contains, besides the
+#' `i`/`j` indices and the response `y`, exactly these predictor columns -
+#' the same names a \code{\link{netmice}} `models` formula for a network can
+#' reference:
+#' \describe{
+#'   \item{\code{reciprocity}}{the target's transpose cell - the tie value
+#'     from j back to i.}
+#'   \item{\code{twopath}}{0/1 indicator for at least one two-path
+#'     i -> k -> j in the target network (at least one shared contact).}
+#'   \item{\code{<attr>_ego}, \code{<attr>_alter}, \code{<attr>_absdiff}}{
+#'     for every \emph{continuous} attribute: the sender's value, the
+#'     receiver's value, and their absolute difference.}
+#'   \item{\code{<attr>_ego_<level>}, \code{<attr>_alter_<level>},
+#'     \code{<attr>_same}}{for every \emph{binary/multinomial} attribute:
+#'     sender and receiver dummies for each non-reference level, and a 0/1
+#'     same-category indicator.}
+#'   \item{\code{<net>_tie}, \code{<net>_recip}, \code{<net>_ego_outdeg},
+#'     \code{<net>_ego_indeg}, \code{<net>_alter_indeg},
+#'     \code{<net>_alter_outdeg}}{for every \emph{other} network: its cell
+#'     (i, j), its transpose cell (j, i), and the sender's and receiver's
+#'     out- and in-degrees in it. With `other_net_predictors = "pca"` the
+#'     four degree terms are collapsed into components named
+#'     \code{other_net_PC<k>}; the \code{_tie}/\code{_recip} terms always
+#'     stay raw.}
+#' }
 #'
 #' @param net_list A (preferably named) list of networks - igraph/`network`
 #'   objects (treated as fully observed) or adjacency matrices (`NA` marks an
@@ -260,10 +290,11 @@
 #'   matters for standalone inferential use of this function (a QAP-style
 #'   tie-formation model), not for the PMM step inside \code{\link{netmice}},
 #'   which always uses a linear working model regardless of tie type.
-#' @param other_net_predictors "raw" (default) includes all four terms per
+#' @param other_net_predictors "raw" (default) includes all six terms per
 #'   other network; "pca" keeps the dyad-level cross-network terms
 #'   (`*_tie`, `*_recip`) as raw predictors and replaces only the node-level
-#'   degree terms (`*_ego_outdeg`, `*_alter_indeg`) with the first
+#'   degree terms (`*_ego_outdeg`, `*_ego_indeg`, `*_alter_indeg`,
+#'   `*_alter_outdeg`) with the first
 #'   `n_components` principal components, useful when many other networks
 #'   are supplied. The cross-network cell terms are never absorbed into
 #'   components: the target's `x_ij` being predicted by the other network's

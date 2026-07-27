@@ -7,7 +7,8 @@
 .impute_ties_gibbs(d, ry, x, mat, binary, donors, check = FALSE)
 }
 \description{
-The ERGM-flavoured alternative to the simultaneous PMM tie update. A
+The default tie updater (the simultaneous PMM update is the alternative,
+`net_update = "simultaneous"`). A
 working model is fit once per visit on the observed dyads - logistic
 regression for a binary network, linear regression otherwise - and one
 coefficient vector is drawn from its asymptotic posterior (mirroring
@@ -38,7 +39,10 @@ statistics; the bounded 0/1 `twopath` indicator is the main safeguard.
 All static (non-endogenous) predictor columns - attribute terms,
 other-network terms, any `models` extras, possibly PCA components - are
 evaluated once at visit start and held fixed during the sweep; only
-`reciprocity` and `twopath` are updated per draw.
+`reciprocity` and `twopath` are updated per draw - including any `models`
+interaction column that involves them (e.g. `age_ego:reciprocity`), whose
+static factors are recomputed from `d` and whose endogenous factors are
+read off the live matrix state per cell, exactly like the main effects.
 
 `check = TRUE` recomputes the binarized adjacency and the two-path count
 matrix from scratch at the end and errors if the incremental bookkeeping

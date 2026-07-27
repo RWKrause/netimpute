@@ -2,6 +2,7 @@
 
 S3method(plot,netmids)
 S3method(print,netmids)
+S3method(print,netquickpred)
 export(complete_netmice)
 export(dyad_regression)
 export(net_diagnostics)
@@ -10,3 +11,4 @@ export(net_measures_core)
 export(net_measures_full)
 export(net_predictors)
 export(netmice)
+export(netquickpred)

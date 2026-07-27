@@ -25,6 +25,8 @@
   n_components,
   net_random_intercepts,
   model_map,
+  qp_pred,
+  feat_clash_names,
   net_init,
   net_update,
   net_binary,

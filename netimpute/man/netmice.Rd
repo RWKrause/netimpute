@@ -19,8 +19,14 @@ netmice(
   structural = NULL,
   net_dependence = NULL,
   models = NULL,
+  predictor_selection = "all",
+  targets = NULL,
+  mincor = 0.1,
+  steps = 3,
+  collin_method = c("pairwise", "vif", "none"),
+  collin_threshold = NULL,
   net_init = c("zero", "sample"),
-  net_update = c("simultaneous", "gibbs"),
+  net_update = c("gibbs", "simultaneous"),
   ncores = 1L,
   seed = NA,
   printFlag = TRUE
@@ -43,21 +49,44 @@ an "unknown" tie).}
 cycling through both attributes and networks is a slower-mixing,
 more complex conditional model than attribute-only imputation).}
 
-\item{method}{Univariate imputation method for numeric and binary
-attributes (and for network ties); only `"pmm"` is currently
-implemented. Nominal attributes with more than two categories are
-*always* imputed with a proper multinomial logistic regression
-(`mice::mice.impute.polyreg()`, via `nnet::multinom()`) regardless of
-`method` - a linear-model-based method like `"pmm"` would otherwise
-have to impose an arbitrary numeric ordering on the categories.}
+\item{method}{Univariate imputation method, dispatched to the
+corresponding \code{mice::mice.impute.<method>()} function. One of
+`"pmm"` (default), `"midastouch"`, `"sample"`, `"cart"`, `"rf"`
+(requires \pkg{ranger} or \pkg{randomForest}), `"norm"`, `"norm.nob"`,
+`"norm.boot"`, `"norm.predict"`, or `"mean"` - the mice univariate
+methods whose working model handles a numeric response. Method-specific
+tuning parameters (e.g. `cart`'s `minbucket`, `rf`'s `ntree`) use
+mice's defaults. The method applies to numeric attributes, to binary
+attributes (integer-coded; a regression-type method's continuous draws
+are rounded and clamped back to the two codes - donor- and tree-based
+methods return valid codes as-is), and to network ties under
+`net_update = "simultaneous"`. It does NOT apply where another working
+model is fixed by design: nominal attributes with more than two
+categories are *always* imputed with a proper multinomial logistic
+regression (`mice::mice.impute.polyreg()`, via `nnet::multinom()`) - a
+numeric-response method would have to impose an arbitrary ordering on
+the categories; ties under the default `net_update = "gibbs"` are drawn
+from the sequential updater's own logistic/linear working model; and
+ties under `net_random_intercepts` use the lme4 mixed-model PMM step.
+Note that for *binary networks* under the simultaneous scheme, a
+regression-type method (the `norm` family, `"mean"`) can impute
+non-0/1 tie values; prefer a donor/tree method - or the default
+tie-wise updater, which draws proper Bernoulli ties - there. `"mean"`
+and `"norm.predict"` are deterministic and yield improper multiple
+imputations (no between-imputation variability from the draw itself);
+mice's documentation carries the same caveat.}
 
-\item{donors}{Number of PMM donors (default 5).}
+\item{donors}{Number of donors for donor-based matching (used by
+`method = "pmm"`, by the tie-wise updater's weighted-tie PMM step, and
+by the `net_random_intercepts` mixed-model PMM step; default 5).}
 
 \item{measure_set}{Which network measures supply predictors for attribute
 imputation, passed to \code{\link{net_measures}}: any combination of
 "core" (default, faster), "full", "homophily", and individual measure
 names - named sets and single measures are unioned, e.g.
-\code{c("core", "total_degree")}. Note the "homophily" block (part of
+\code{c("core", "total_degree")}. The \emph{Implemented network
+measures} section below lists every available measure name. Note the
+"homophily" block (part of
 both "core" and "full") supplies the alter-composition predictors that
 carry homophily/influence signal; dropping it by selecting structural
 measures only will typically weaken attribute imputation.}
@@ -95,7 +124,11 @@ intercept - the dyad effect is the SRM reciprocity term and replaces
 it). Note the matching is "type-0"
 (no Bayesian coefficient draw, unlike `mice::mice.impute.pmm()`);
 between-imputation variability comes from the donor draw and the chain
-stochasticity. Attribute imputation is unaffected. Requires \pkg{lme4}.}
+stochasticity. Attribute imputation is unaffected. Requires \pkg{lme4}.
+Random intercepts exist only in the simultaneous update scheme: setting
+this argument while leaving `net_update` at its default switches the
+tie updating to `"simultaneous"` (with a message); combining it with an
+explicit `net_update = "gibbs"` is an error.}
 
 \item{structural}{`NULL` (default), one n x n logical matrix, or a named
 list of n x n logical matrices whose names match networks in `net_list`.
@@ -144,7 +177,48 @@ those cells stay missing, with a warning.}
 \item{models}{Optional list/character vector of formula strings (or
 formula objects), one per attribute/network you want a custom model
 for - see Details. E.g.
-`list("happiness ~ indegree + age + performance * gender")`.}
+`list("happiness ~ indegree + age + performance * gender")`. Formulas
+may interact any of the internally created terms, for networks
+included - e.g. `list("friends ~ age_ego:reciprocity")`; see the
+\emph{Interactions in `models`} paragraph and the \emph{Dyad-level
+term names} section.}
+
+\item{predictor_selection}{How each target's predictor set is chosen.
+`"all"` (default; the behavior to date): every auto-generated predictor
+enters every model, with the automatic PCA safeguard capping the count.
+`"quickpred"`: \code{\link{netquickpred}} is run once, before the
+chains, and each imputed attribute/network gets its own lean predictor
+set - correlation-screened (against the target's values and, like
+\code{mice::quickpred()}, its missingness indicator), recursively
+expanded over `steps` levels of predictors-of-predictors, and pruned
+for collinearity - instead of everything-plus-PCA. Any extra `models`
+terms are still appended on top. Alternatively, pass a precomputed
+`netquickpred` object (built on the same data/networks) for full
+control and inspection; targets/variables without an entry in it fall
+back to the full predictor set.}
+
+\item{targets}{Optional character vector naming the attributes/networks
+whose imputations you actually need. Every *other* variable or network
+with missing data that is not selected as a predictor (at any step) by
+the predictor selection is dropped from the call entirely - it is not
+imputed, and it appears in neither the predictors nor the returned
+completed data - saving computation. Selected predictors with missing
+data are kept and imputed alongside the targets; fully observed
+variables are never dropped, and variables/networks a `models` formula
+depends on - by bare name or as the base of a derived term such as
+`advice_tie` or `friends_age_alter_mean` - or networks bound by
+`net_dependence` rules are never dropped either.
+With `predictor_selection = "all"`, non-target missing-data variables
+are dropped unconditionally (there is no selection to keep them).
+Default `NULL`: everything with missing data is imputed.}
+
+\item{mincor, steps, collin_method, collin_threshold}{Passed to
+\code{\link{netquickpred}} when `predictor_selection = "quickpred"`:
+the screening correlation threshold (default 0.1), the number of
+predictor levels (default 3 - direct predictors, their predictors, and
+theirs again), the collinearity pruning method (`"pairwise"`, `"vif"`,
+or `"none"`), and its threshold (`NULL` = 0.9 for pairwise, 10 for
+VIF). Ignored otherwise.}
 
 \item{net_init}{How each chain initializes a network's missing cells
 before the first sweep. `"zero"` (default) starts every missing tie at 0
@@ -157,28 +231,33 @@ the previous behavior of filling missing cells by resampling observed
 off-diagonal values (marginal-density start).}
 
 \item{net_update}{How a network's missing cells are updated at each
-visit. `"simultaneous"` (default; the behavior to date): one PMM
+visit. `"gibbs"` (default): sequential single-tie ("tie-wise")
+imputation - a working model is fit once per visit on the observed
+dyads (logistic regression for a binary network, linear regression
+otherwise), one coefficient vector is drawn from its asymptotic
+posterior, and the missing cells are then visited one at a time in
+random order, each draw using the *current* values of the endogenous
+statistics (`reciprocity`, `twopath`), which are refreshed after every
+single draw via change statistics (O(1) for reciprocity, two O(n)
+vector updates on the running two-path count matrix - never a full
+recomputation). Binary ties are drawn from `Bernoulli(plogis(eta))`;
+weighted ties by PMM donor matching on the fitted values. Each tie is
+thus drawn conditional on all previously imputed ties - the
+full-conditional (Gibbs) update of an ERGM-style model with
+pseudo-likelihood-estimated parameters, restricted to the missing
+cells - which yields properly dependent within-network imputations and
+avoids the synchronous-update artifact of the simultaneous scheme.
+Static predictors (attribute terms, other-network terms, `models`
+extras) are evaluated once per visit and held fixed during the sweep;
+`models` interaction terms involving `reciprocity`/`twopath` are
+refreshed per draw like the main effects. `"simultaneous"`: one PMM
 working model per visit imputes every missing cell at once, all from
-the same snapshot of the endogenous statistics. `"gibbs"`: sequential
-single-tie imputation - a working model is fit once per visit on the
-observed dyads (logistic regression for a binary network, linear
-regression otherwise), one coefficient vector is drawn from its
-asymptotic posterior, and the missing cells are then visited one at a
-time in random order, each draw using the *current* values of the
-endogenous statistics (`reciprocity`, `twopath`), which are refreshed
-after every single draw via change statistics (O(1) for reciprocity,
-two O(n) vector updates on the running two-path count matrix - never a
-full recomputation). Binary ties are drawn from
-`Bernoulli(plogis(eta))`; weighted ties by PMM donor matching on the
-fitted values. Each tie is thus drawn conditional on all previously
-imputed ties - the full-conditional (Gibbs) update of an ERGM-style
-model with pseudo-likelihood-estimated parameters, restricted to the
-missing cells - which yields properly dependent within-network
-imputations and avoids the synchronous-update artifact of the
-simultaneous scheme. Static predictors (attribute terms, other-network
-terms, `models` extras) are evaluated once per visit and held fixed
-during the sweep. Not compatible with `net_random_intercepts`;
-attribute imputation is unaffected.}
+the same snapshot of the endogenous statistics. `net_random_intercepts`
+requires the simultaneous scheme: combining it with an *explicit*
+`net_update = "gibbs"` errors, while setting `net_random_intercepts`
+alone (leaving `net_update` at its default) falls back to
+`"simultaneous"` with a message. Attribute imputation is unaffected by
+this argument.}
 
 \item{ncores}{Number of parallel workers for the `m` chains via
 \pkg{future} (default 1 = sequential). See Details for the
@@ -198,7 +277,11 @@ An object of class `"netmids"` with elements: `data`, `net_list`
   `structural` (the
   per-network list of structural-zero matrices, or `NULL`),
   `net_dependence` (the normalized rule list, or `NULL`),
-  `models`, `imp` (list of `m` completed attribute data.frames),
+  `models`, `predictor_selection` (`"all"`, or the `netquickpred` object
+  used - inspect it to see each target's selected predictors), `targets`
+  (as supplied; when variables were dropped via `targets`, `data`,
+  `net_list`, and the completed datasets contain only the kept
+  columns/networks), `imp` (list of `m` completed attribute data.frames),
   `imp_nets` (list of `m` lists of completed adjacency matrices),
   `visit_orders` (the randomized target order used in each chain),
   `chainMean`/`chainVar` (variable x iteration x m arrays of the mean/
@@ -228,10 +311,13 @@ when imputing that attribute, since regressing a variable on a transform
 of itself would anchor imputations to their own previous draws. Each
 network's missing ties are imputed
 conditional on whichever attributes and other networks were most recently
-updated (via \code{\link{dyad_regression}}'s predictor set). Only
-predictive mean matching is implemented for now (`method = "pmm"`);
-`method` is kept as an argument so alternatives can be added later without
-changing the call signature.
+updated (via \code{\link{dyad_regression}}'s predictor set). The
+univariate draw dispatches to \code{mice::mice.impute.<method>()}:
+predictive mean matching (`method = "pmm"`, the default) or any of the
+other supported numeric-response mice methods (`"midastouch"`,
+`"sample"`, `"cart"`, `"rf"`, the `"norm"` family, `"mean"`) - see the
+`method` argument for exactly where the method applies and where a
+different working model is fixed by design.
 }
 \details{
 \strong{Interleaving and re-computation.} Because network-derived
@@ -262,6 +348,19 @@ count inside the imputation loop. This cap applies only to the
 auto-generated predictors; any extra terms from `models` are added on top
 and are the user's own, deliberate choice.
 
+\strong{Per-target predictor selection (`predictor_selection`,
+`targets`).} As an alternative to the everything-plus-PCA default,
+`predictor_selection = "quickpred"` runs \code{\link{netquickpred}} once
+per call: each imputed attribute gets only its correlation-selected
+attributes and network measures, each imputed network only its selected
+dyad-level terms (its own `reciprocity`/`twopath` always included), so
+every coefficient keeps its own name instead of being folded into a
+principal component. The selection is computed once, on the pre-chain
+data (missing ties treated as 0 for the network measures), and reused at
+every visit of every chain; the PCA cap remains only as a rank fallback.
+`targets` additionally drops unneeded missing-data variables/networks
+from the call - see the argument documentation.
+
 \strong{Custom imputation models (`models`).} By default every attribute
 and network is imputed from the full auto-generated predictor set (other
 attributes/networks' structural+homophily measures, or dyad-level ego/
@@ -285,6 +384,94 @@ single network, if the bare name would otherwise collide with a raw
 attribute of the same name) - matching \code{\link{net_measures_core}}'s
 naming.
 
+\strong{Interactions in `models`.} Because the right-hand side goes
+through `model.matrix()`, `*`/`:` interaction syntax works for network
+targets exactly as it does for attributes, and any internally created
+dyad-level term can be interacted with any other - including the target
+network's own endogenous terms and other networks' terms. For example,
+`friends ~ age_ego:reciprocity` lets the tendency to reciprocate depend
+on the sender's age; `friends ~ advice_tie:gender_same` interacts another
+network's tie with a same-category indicator;
+`friends ~ reciprocity:twopath` interacts the two endogenous terms with
+each other. Main effects the auto-generated predictor set already
+contains are not duplicated. Under `net_update = "gibbs"`, an interaction
+involving `reciprocity` or `twopath` is - like those main effects -
+re-evaluated from the current matrix state after every single tie draw,
+so it stays live throughout the sequential sweep. The section
+\emph{Dyad-level term names} below lists every name a network's formula
+can reference; the section \emph{Implemented network measures} lists
+every measure name an attribute's formula can reference.
+}
+\section{Dyad-level term names (for a network's `models` formula)}{
+
+When a network is the imputation target, the working model's rows are its
+off-diagonal cells (i = sender, j = receiver) and the following predictor
+columns are created internally (by \code{\link{dyad_regression}}'s
+builder). A `models` formula for a network may reference any of them,
+alone or in interactions:
+\describe{
+  \item{\code{reciprocity}}{the target's transpose cell - the tie value
+    from j back to i.}
+  \item{\code{twopath}}{0/1 indicator for at least one two-path
+    i -> k -> j in the target network (at least one shared contact).}
+  \item{\code{<attr>_ego}, \code{<attr>_alter}, \code{<attr>_absdiff}}{
+    for every \emph{continuous} attribute: the sender's value, the
+    receiver's value, and their absolute difference.}
+  \item{\code{<attr>_ego_<level>}, \code{<attr>_alter_<level>},
+    \code{<attr>_same}}{for every \emph{binary/multinomial} attribute:
+    sender and receiver dummies for each non-reference level, and a 0/1
+    same-category indicator.}
+  \item{\code{<net>_tie}, \code{<net>_recip}, \code{<net>_ego_outdeg},
+    \code{<net>_ego_indeg}, \code{<net>_alter_indeg},
+    \code{<net>_alter_outdeg}}{for every \emph{other} network: its cell
+    (i, j), its transpose cell (j, i), and the sender's and receiver's
+    out- and in-degrees in it. With `other_net_predictors = "pca"` the
+    four degree terms are collapsed into components named
+    \code{other_net_PC<k>}; the \code{_tie}/\code{_recip} terms always
+    stay raw.}
+}
+}
+
+\section{Implemented network measures (for `measure_set` and an attribute's `models` formula)}{
+
+These are the node-level measures \code{\link{net_measures}} implements;
+any of them can be requested via `measure_set` (individually or through
+the named sets) and - once part of `measure_set` - referenced in an
+attribute's `models` formula (bare, or network-prefixed as described
+above):
+\describe{
+  \item{Named sets}{\code{"core"} = outdegree, indegree,
+    reciprocity_ratio, bonacich_power, betweenness, isolate, constraint,
+    harmonic_closeness, local_clustering, homophily;
+    \code{"full"} = every measure below plus homophily.}
+  \item{Degree family}{\code{total_degree}, \code{indegree},
+    \code{outdegree}, \code{reciprocal_degree},
+    \code{nonreciprocal_degree}, \code{reciprocity_ratio},
+    \code{weighted_degree}}
+  \item{Influence}{\code{eigenvector}, \code{bonacich_power},
+    \code{alpha_centrality}, \code{pagerank}, \code{gilschmidt}
+    (requires \pkg{sna})}
+  \item{Brokerage/position}{\code{betweenness}, \code{load_centrality},
+    \code{stress_centrality}, \code{flow_betweenness} (the latter three
+    require \pkg{sna}), \code{constraint}, \code{effective_size},
+    \code{efficiency}, \code{redundancy}}
+  \item{Distance-based}{\code{closeness}, \code{harmonic_closeness},
+    \code{information_centrality} (requires \pkg{sna})}
+  \item{Prestige}{\code{prestige} (requires \pkg{sna})}
+  \item{Position/closure}{\code{neighbor_degree},
+    \code{local_clustering}, \code{coreness}, \code{isolate}}
+  \item{\code{"homophily"} (attribute-based block)}{per
+    binary/multinomial attribute: \code{<attr>_ei_index},
+    \code{<attr>_blau_index}, \code{<attr>_alter_mode}; per continuous
+    attribute: \code{<attr>_diff_out}, \code{<attr>_diff_in},
+    \code{<attr>_alter_mean}, \code{<attr>_alter_mean_in},
+    \code{<attr>_alter_mean_out}, \code{<attr>_alter_min},
+    \code{<attr>_alter_max}. When imputing an attribute, its own
+    ego-value-dependent measures (\code{<attr>_ei_index},
+    \code{<attr>_diff_out}, \code{<attr>_diff_in}) are withheld from its
+    predictor set (see above) and cannot be referenced in its formula.}
+}
+
 \strong{Parallelization (`ncores`).} When `ncores > 1`, the `m` chains run
 as independent \pkg{future} futures (`future::multisession`), each with
 its own random visit order and RNG stream (`seed + im`, reproducible
@@ -294,6 +481,7 @@ installed} (`devtools::install()`/`R CMD INSTALL`), not merely loaded via
 processes that resolve `netimpute`'s internal functions by loading the
 installed namespace. Use `ncores = 1` (default) during development.
 }
+
 \examples{
 \dontrun{
 set.seed(1)

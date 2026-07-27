@@ -114,3 +114,13 @@ test_that(".homophily_block: dispatches continuous vs categorical columns correc
   out2 <- .homophily_block(g, attrs["age"], attr_types = c(age = "multinomial"))
   expect_true(all(c("age_ei_index", "age_blau_index", "age_alter_mode") %in% names(out2)))
 })
+
+test_that(".alter_continuous_stats: all-NA alter values give NA min/max, not +/-Inf", {
+  m <- matrix(0, 3, 3)
+  m[1, 2] <- m[1, 3] <- 1  # node 1's alters are 2 and 3
+  g <- igraph::graph_from_adjacency_matrix(m, mode = "directed", diag = FALSE)
+  out <- expect_silent(.alter_continuous_stats(g, c(5, NA, NA)))
+  expect_true(is.na(out$alter_min[1]))
+  expect_true(is.na(out$alter_max[1]))
+  expect_true(all(is.finite(as.matrix(out)) | is.na(as.matrix(out))))
+})

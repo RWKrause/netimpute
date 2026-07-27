@@ -31,9 +31,43 @@ test_that("netmice: default args run to completion with mixed attributes and net
   }
 })
 
-test_that("netmice: method is restricted to 'pmm' for now", {
+test_that("netmice: an unknown method errors and names the supported set", {
   fx <- make_missing_fixture()
-  expect_error(netmice(fx$attrs, fx$nets, m = 1, maxit = 1, method = "norm", printFlag = FALSE))
+  expect_error(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 1, method = "banana", printFlag = FALSE),
+    "Supported methods.*pmm.*cart"
+  )
+})
+
+test_that("netmice: method = 'cart' runs end to end via the generic mice dispatch", {
+  fx <- make_missing_fixture()
+  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, method = "cart",
+                  seed = 5, printFlag = FALSE)
+  expect_equal(fit$method, "cart")
+  expect_false(anyNA(fit$imp[[1]]$age))
+  expect_false(anyNA(fit$imp[[1]]$status))
+  expect_false(anyNA(fit$imp[[1]]$dept))
+  off <- which(row(fx$nets$friends) != col(fx$nets$friends))
+  expect_false(anyNA(fit$imp_nets[[1]]$friends[off]))
+  # tree draws come from observed values
+  expect_true(all(fit$imp[[1]]$age %in% fx$attrs$age[!is.na(fx$attrs$age)]))
+})
+
+test_that("netmice: method = 'norm' keeps binary attributes on their two levels (round + clamp)", {
+  fx <- make_missing_fixture()
+  fit <- netmice(fx$attrs, fx$nets, m = 2, maxit = 2, method = "norm",
+                  seed = 6, printFlag = FALSE)
+  expect_equal(fit$method, "norm")
+  for (im in 1:2) {
+    expect_false(anyNA(fit$imp[[im]]$status))
+    # binary attribute: continuous norm draws must map back to valid levels
+    expect_true(all(fit$imp[[im]]$status %in%
+                      unique(fx$attrs$status[!is.na(fx$attrs$status)])))
+    # continuous attribute: norm may (and typically does) produce values
+    # outside the observed set - that is the point of a non-donor method
+    expect_true(is.numeric(fit$imp[[im]]$age))
+    expect_false(anyNA(fit$imp[[im]]$age))
+  }
 })
 
 test_that("netmice: donors argument is accepted and used without error", {
@@ -146,6 +180,23 @@ test_that("netmice: net_update = 'gibbs' rejects net_random_intercepts", {
   )
 })
 
+test_that("netmice: tie-wise 'gibbs' updating is the default", {
+  fx <- make_missing_fixture()
+  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE)
+  expect_equal(fit$net_update, "gibbs")
+})
+
+test_that("netmice: net_random_intercepts without an explicit net_update falls back to 'simultaneous'", {
+  skip_if_not_installed("lme4")
+  fx <- make_missing_fixture()
+  expect_message(
+    fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE,
+                   net_random_intercepts = "ego"),
+    "falling back"
+  )
+  expect_equal(fit$net_update, "simultaneous")
+})
+
 test_that("netmice: other_net_predictors = 'pca' runs end to end", {
   fx <- make_missing_fixture()
   fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, other_net_predictors = "pca",
@@ -215,6 +266,127 @@ test_that("netmice: models warns (but doesn't error) for a fully-observed target
             models = list("advice ~ age_absdiff")),
     "will not be used"
   )
+})
+
+test_that("netmice: models - network formula with interactions of internal terms", {
+  fx <- make_missing_fixture()
+  # an ego attribute x the target's own reciprocity, and a cross-network
+  # tie x an attribute-similarity term: every internally created dyad-level
+  # column is interactable via model.matrix()
+  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, printFlag = FALSE,
+                  models = list("friends ~ age_ego:reciprocity + advice_tie:age_absdiff"))
+  off <- which(row(fx$nets$friends) != col(fx$nets$friends))
+  expect_false(anyNA(fit$imp_nets[[1]]$friends[off]))
+})
+
+test_that("netmice: models - endogenous interaction under net_update = 'gibbs'", {
+  fx <- make_missing_fixture()
+  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, net_update = "gibbs",
+                  seed = 9, printFlag = FALSE,
+                  models = list("friends ~ age_ego:reciprocity + reciprocity:twopath"))
+  off <- which(row(fx$nets$friends) != col(fx$nets$friends))
+  friends_done <- fit$imp_nets[[1]]$friends
+  expect_false(anyNA(friends_done[off]))
+  expect_true(all(friends_done %in% c(0, 1)))
+  obs <- !is.na(fx$nets$friends)
+  expect_identical(friends_done[obs], fx$nets$friends[obs])
+})
+
+test_that(".gibbs_endo_interactions: decomposes endogenous interaction columns", {
+  d <- data.frame(age_ego = c(1, 2, 3, 4),
+                  reciprocity = c(0, 1, 0, 1),
+                  twopath = c(1, 0, 1, 0))
+  xn <- c("age_ego", "age_ego:reciprocity", "reciprocity:twopath",
+          "age_ego:not_in_d")
+  info <- netimpute:::.gibbs_endo_interactions(xn, d)
+  # pure main effects and undecomposable columns are skipped
+  expect_named(info, c("age_ego:reciprocity", "reciprocity:twopath"))
+  ar <- info[["age_ego:reciprocity"]]
+  expect_equal(ar$col, 2L)
+  expect_true(ar$recip)
+  expect_false(ar$twop)
+  expect_equal(ar$static, c(1, 2, 3, 4))
+  rt <- info[["reciprocity:twopath"]]
+  expect_true(rt$recip && rt$twop)
+  expect_equal(rt$static, rep(1, 4))
+})
+
+test_that(".impute_ties_gibbs: endogenous interaction columns keep the bookkeeping consistent", {
+  set.seed(21)
+  n <- 15
+  m <- matrix(rbinom(n * n, 1, 0.2), n, n); diag(m) <- 0
+  mis <- sample(which(row(m) != col(m)), 60)
+  m[mis] <- NA
+  attrs <- data.frame(age = rnorm(n), grade = rnorm(n))
+  filled <- netimpute:::.init_fill_matrix(m, init = "zero")
+  built <- suppressMessages(
+    netimpute:::.build_dyad_data(list(net = filled), attrs, 1))
+  d <- built$data
+  ry <- !is.na(m)[cbind(d$i, d$j)]
+  x <- netimpute:::.clean_predictor_matrix(
+    d[setdiff(names(d), c("i", "j", "y"))], ry = ry)
+  x <- cbind(x, "age_ego:reciprocity" = d$age_ego * d$reciprocity)
+  out <- netimpute:::.impute_ties_gibbs(d = d, ry = ry, x = x, mat = filled,
+                                        binary = TRUE, donors = 5,
+                                        check = TRUE)
+  obs <- !is.na(m) & (row(m) != col(m))
+  expect_identical(out[obs], m[obs])
+  expect_true(all(out[mis] %in% c(0, 1)))
+})
+
+test_that("netmice: `targets` never drops a network/attribute a models formula depends on via derived terms", {
+  fx <- make_missing_fixture()
+  off <- which(row(fx$nets$advice) != col(fx$nets$advice))
+  fx$nets$advice[sample(off, 20)] <- NA
+  # advice and age have missing data and are not targets, but the friends
+  # formula references advice_tie and age_ego - both must be kept (before
+  # the derived-name protection this errored with "could not evaluate")
+  fit <- suppressMessages(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE,
+            targets = "friends",
+            models = list("friends ~ advice_tie:age_ego")))
+  expect_true("advice" %in% names(fit$imp_nets[[1]]))
+  expect_true("age" %in% names(fit$imp[[1]]))
+  expect_false(anyNA(fit$imp_nets[[1]]$advice[off]))
+  expect_false(anyNA(fit$imp[[1]]$age))
+})
+
+test_that("netmice: models-referenced variables survive a precomputed netquickpred that dropped them", {
+  set.seed(42)
+  n <- 30
+  friends <- matrix(rbinom(n * n, 1, 0.12), n, n); diag(friends) <- 0
+  advice  <- matrix(rbinom(n * n, 1, 0.12), n, n); diag(advice) <- 0
+  attrs <- data.frame(age = rnorm(n, 35, 8),
+                      gender = sample(c("F", "M"), n, TRUE),
+                      happiness = rnorm(n))
+  attrs$happiness[sample(n, 5)] <- NA
+  attrs$age[sample(n, 4)] <- NA
+  off <- which(row(friends) != col(friends))
+  friends[sample(off, 40)] <- NA
+  advice[sample(off, 40)] <- NA
+
+  # a selection computed WITHOUT knowledge of `models`, strict enough that
+  # age and both networks land in its drop lists
+  qp <- suppressMessages(
+    netquickpred(attrs, list(friends = friends, advice = advice),
+                 targets = "happiness", mincor = 0.99))
+  expect_true("age" %in% qp$drop$attributes)
+  expect_true("advice" %in% qp$drop$networks)
+
+  # netmice must protect everything the formulas depend on - `age` (bare),
+  # `friends` (a formula LHS), and `advice` (via the derived advice_tie
+  # term) - keep them imputed, and evaluate the formulas at every visit
+  fit <- suppressMessages(
+    netmice(attrs, list(friends = friends, advice = advice),
+            m = 1, maxit = 2, seed = 1, printFlag = FALSE,
+            predictor_selection = qp,
+            models = list("happiness ~ age",
+                          "friends ~ advice_tie:age_ego")))
+  expect_true("age" %in% names(fit$imp[[1]]))
+  expect_true(all(c("friends", "advice") %in% names(fit$imp_nets[[1]])))
+  expect_false(anyNA(fit$imp[[1]]$age))
+  expect_false(anyNA(fit$imp[[1]]$happiness))
+  expect_false(anyNA(fit$imp_nets[[1]]$advice[off]))
 })
 
 test_that("netmice: seed gives identical results across repeated runs", {

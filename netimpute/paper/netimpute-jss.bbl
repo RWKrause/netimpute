@@ -20,10 +20,30 @@ Huisman, M. (2009).
 \newblock Imputation of missing network data: Some simple procedures.
 \newblock {\em Journal of Social Structure}, 10(1):1--29.
 
+\bibitem[Koskinen et~al., 2010]{Koskinen2010}
+Koskinen, J.~H., Robins, G.~L., and Pattison, P.~E. (2010).
+\newblock Analysing exponential random graph (p-star) models with missing data using bayesian data augmentation.
+\newblock {\em Statistical Methodology}, 7(3):366--384.
+
+\bibitem[Koskinen et~al., 2013]{Koskinen2013}
+Koskinen, J.~H., Robins, G.~L., Wang, P., and Pattison, P.~E. (2013).
+\newblock Bayesian analysis for partially observed network data, missing ties, attributes and actors.
+\newblock {\em Social networks}, 35(4):514--527.
+
 \bibitem[Krackhardt, 1988]{Krackhardt1988}
 Krackhardt, D. (1988).
 \newblock Predicting with networks: Nonparametric multiple regression analysis of dyadic data.
 \newblock {\em Social Networks}, 10(4):359--381.
+
+\bibitem[Krause, 2019]{Krause2019}
+Krause, R.~W. (2019).
+\newblock {\em Multiple Imputation for Missing Network Data}.
+\newblock Doctoral dissertation, University of Groningen, Groningen, The Netherlands.
+
+\bibitem[Krause et~al., 2018]{Krause2018}
+Krause, R.~W., Huisman, M., and Snijders, T. A.~B. (2018).
+\newblock Multiple imputation for longitudinal network data.
+\newblock {\em Statistica Applicata-Italian Journal of Applied Statistics}, 30(1):33--57.
 
 \bibitem[Krause et~al., 2020]{Krause2020}
 Krause, R.~W., Huisman, M., Steglich, C., and Snijders, T. A.~B. (2020).
@@ -49,6 +69,16 @@ Robins, G., Pattison, P., Kalish, Y., and Lusher, D. (2007).
 Rubin, D.~B. (1987).
 \newblock {\em Multiple Imputation for Nonresponse in Surveys}.
 \newblock Wiley, New York.
+
+\bibitem[Snijders, 1996]{Snijders1996}
+Snijders, T.~A. (1996).
+\newblock Stochastic actor-oriented models for network change.
+\newblock {\em Journal of mathematical sociology}, 21(1-2):149--172.
+
+\bibitem[Snijders, 2017]{Snijders2017}
+Snijders, T.~A. (2017).
+\newblock Stochastic actor-oriented models for network dynamics.
+\newblock {\em Annual review of statistics and its application}, 4(1):343--363.
 
 \bibitem[{van Buuren} and Groothuis-Oudshoorn, 2011]{vanBuuren2011}
 {van Buuren}, S. and Groothuis-Oudshoorn, K. (2011).

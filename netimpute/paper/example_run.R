@@ -1,5 +1,6 @@
 # Generates the real, verified output embedded in the JSS paper's
-# illustrative example (paper/netimpute-jss.tex). Run from the package root.
+# illustrative example (paper/netimpute-jss.tex). Run from the package root;
+# stdout of this script is what the paper's Routput blocks show.
 options(width = 80)
 suppressMessages(library(netimpute))
 set.seed(20260701)
@@ -18,12 +19,16 @@ attrs <- data.frame(
 )
 
 cat("---- net_measures_core() on the friendship network ----\n")
-core_out <- net_measures_core(friends, attrs)
+core_out <- suppressMessages(net_measures_core(friends, attrs))
 print(round(head(core_out[c("node_id", "outdegree", "indegree", "reciprocity_ratio",
                              "betweenness", "constraint")]), 3))
 
+cat("\n---- net_measures(): a bespoke measure selection ----\n")
+print(names(net_measures(friends, measure_set = c("indegree", "betweenness", "pagerank"))))
+
 cat("\n---- dyad_regression(): friendship ties on attributes + advice network ----\n")
-dr <- dyad_regression(list(friends = friends, advice = advice), attrs, target = "friends")
+dr <- suppressMessages(
+  dyad_regression(list(friends = friends, advice = advice), attrs, target = "friends"))
 print(summary(dr$model)$coefficients[c("age_absdiff", "department_same", "advice_tie"), ])
 
 cat("\n---- Introduce missingness in attributes and in the friendship network ----\n")
@@ -42,14 +47,15 @@ print(colSums(is.na(attrs_miss)))
 cat("Missing ties in the friendship network:",
     sum(is.na(friends_miss[row(friends_miss) != col(friends_miss)])), "\n")
 
-cat("\n---- netmice(): joint imputation ----\n")
+cat("\n---- netmice(): joint imputation (tie-wise Gibbs updating by default) ----\n")
 # maxit = 5 here (below the default of 20) keeps this illustration's
 # convergence tables compact; see ?netmice for why 20 is recommended.
-fit <- netmice(
+fit <- suppressMessages(netmice(
   attrs_miss, list(friends = friends_miss, advice = advice),
   m = 5, maxit = 5, donors = 5, seed = 20260701, printFlag = FALSE,
-  models = list("performance ~ friends_indegree + age * department")
-)
+  models = list("performance ~ friends_indegree + age * department",
+                "friends ~ age_ego:reciprocity")
+))
 print(fit)
 
 cat("\n---- One completed dataset ----\n")
@@ -64,3 +70,13 @@ print(round(fit$chainMean["age", , ], 2))
 
 cat("\n---- Network-level diagnostics across iterations (chain 1, friendship net) ----\n")
 print(round(t(fit$netChain["friends", , , 1]), 3))
+
+cat("\n---- netquickpred(): per-target predictor selection ----\n")
+# mincor well above the 0.1 default: with only n = 40 nodes, chance
+# correlations of network measures easily exceed 0.1, so a stricter screen
+# keeps the illustration honest (and compact)
+qp <- suppressMessages(netquickpred(
+  attrs_miss, list(friends = friends_miss, advice = advice),
+  targets = "performance", mincor = 0.4
+))
+print(qp)

@@ -1,0 +1,46 @@
+This is BibTeX, Version 0.99e (TeX Live 2026)
+Capacity: max_strings=200000, hash_size=200000, hash_prime=170003
+The top-level auxiliary file: netimpute-jss.aux
+The style file: apalike.bst
+Database file #1: netimpute.bib
+You've used 18 entries,
+            1935 wiz_defined-function locations,
+            606 strings with 6429 characters,
+and the built_in function-call counts, 6698 in all, are:
+= -- 672
+> -- 226
+< -- 14
++ -- 76
+- -- 72
+* -- 565
+:= -- 1171
+add.period$ -- 54
+call.type$ -- 18
+change.case$ -- 124
+chr.to.int$ -- 18
+cite$ -- 18
+duplicate$ -- 263
+empty$ -- 491
+format.name$ -- 100
+if$ -- 1303
+int.to.chr$ -- 1
+int.to.str$ -- 0
+missing$ -- 21
+newline$ -- 93
+num.names$ -- 54
+pop$ -- 99
+preamble$ -- 1
+purify$ -- 126
+quote$ -- 0
+skip$ -- 198
+stack$ -- 0
+substring$ -- 492
+swap$ -- 27
+text.length$ -- 1
+text.prefix$ -- 0
+top$ -- 0
+type$ -- 100
+warning$ -- 0
+while$ -- 61
+width$ -- 0
+write$ -- 239

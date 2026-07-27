@@ -32,6 +32,10 @@
 #'   iteration). Pass \code{character(0)} to skip the networks page.
 #' @param ask Logical; prompt before each page of plots (default: only when
 #'   the session is interactive, as for other multi-page base R plots).
+#' @param max_rows Maximum number of grid rows per page (default 4). With
+#'   many attributes or networks the plots are split across additional
+#'   pages instead of being squeezed into ever-smaller panels (which
+#'   eventually errors with "figure margins too large").
 #' @param ... Passed on to the underlying \code{matplot()} calls.
 #'
 #' @return \code{x}, invisibly.
@@ -43,7 +47,7 @@
 #' plot(fit)                       # both pages
 #' plot(fit, nets = character(0))  # attributes only
 #' }
-plot.netmids <- function(x, vars = NULL, nets = NULL, ask = interactive(), ...) {
+plot.netmids <- function(x, vars = NULL, nets = NULL, ask = interactive(), max_rows = 4L, ...) {
   if (!inherits(x, "netmids")) stop("`x` must be a netmids object from netmice().", call. = FALSE)
 
   vars <- if (is.null(vars)) x$var_missing else vars
@@ -63,42 +67,62 @@ plot.netmids <- function(x, vars = NULL, nets = NULL, ask = interactive(), ...) 
     return(invisible(x))
   }
 
+  max_rows <- as.integer(max_rows)
+  if (length(max_rows) != 1 || is.na(max_rows) || max_rows < 1) {
+    stop("`max_rows` must be a single positive integer.", call. = FALSE)
+  }
+
   old_ask <- grDevices::devAskNewPage(ask)
   on.exit(grDevices::devAskNewPage(old_ask), add = TRUE)
 
   m <- x$m
   chain_cols <- grDevices::hcl.colors(max(m, 3), palette = "Dark 3")[seq_len(m)]
 
+  # Compact panels: tight margins and scaled-down text, so even a full
+  # max_rows-page fits comfortably on an ordinary device.
+  compact_par <- function(nrow, ncol) {
+    graphics::par(mfrow = c(nrow, ncol), mar = c(2.2, 2.4, 1.6, 0.5),
+                  mgp = c(1.3, 0.4, 0), tcl = -0.3,
+                  cex.main = 0.9, cex.lab = 0.8, cex.axis = 0.75)
+  }
+  # Split a vector of row labels into pages of at most max_rows each.
+  paginate <- function(items) split(items, ceiling(seq_along(items) / max_rows))
+
   if (length(vars)) {
-    old_par <- graphics::par(mfrow = c(length(vars), 2), mar = c(3, 3, 2, 1), mgp = c(1.8, 0.6, 0))
+    old_par <- graphics::par(no.readonly = TRUE)
     on.exit(graphics::par(old_par), add = TRUE)
-    for (i in seq_along(vars)) {
-      v <- vars[i]
-      graphics::matplot(x$chainMean[v, , ], type = "l", lty = 1, col = chain_cols,
-                         xlab = "Iteration", ylab = "mean", main = paste(v, "- mean"), ...)
-      if (i == 1) {
-        graphics::legend("topright", legend = paste("chain", seq_len(m)), col = chain_cols,
-                          lty = 1, cex = 0.6, bty = "n")
+    for (page in paginate(vars)) {
+      compact_par(length(page), 2)
+      for (i in seq_along(page)) {
+        v <- page[i]
+        graphics::matplot(x$chainMean[v, , ], type = "l", lty = 1, col = chain_cols,
+                           xlab = "Iteration", ylab = "mean", main = paste(v, "- mean"), ...)
+        if (i == 1) {
+          graphics::legend("topright", legend = paste("chain", seq_len(m)), col = chain_cols,
+                            lty = 1, cex = 0.6, bty = "n")
+        }
+        graphics::matplot(x$chainVar[v, , ], type = "l", lty = 1, col = chain_cols,
+                           xlab = "Iteration", ylab = "variance", main = paste(v, "- variance"), ...)
       }
-      graphics::matplot(x$chainVar[v, , ], type = "l", lty = 1, col = chain_cols,
-                         xlab = "Iteration", ylab = "variance", main = paste(v, "- variance"), ...)
     }
   }
 
   if (length(nets)) {
     diag_names <- dimnames(x$netChain)[[2]]
-    old_par2 <- graphics::par(mfrow = c(length(nets), length(diag_names)),
-                               mar = c(3, 3, 2, 1), mgp = c(1.8, 0.6, 0))
+    old_par2 <- graphics::par(no.readonly = TRUE)
     on.exit(graphics::par(old_par2), add = TRUE)
-    first <- TRUE
-    for (nm in nets) {
-      for (dn in diag_names) {
-        graphics::matplot(x$netChain[nm, dn, , ], type = "l", lty = 1, col = chain_cols,
-                           xlab = "Iteration", ylab = dn, main = paste(nm, "-", dn), ...)
-        if (first) {
-          graphics::legend("topright", legend = paste("chain", seq_len(m)), col = chain_cols,
-                            lty = 1, cex = 0.6, bty = "n")
-          first <- FALSE
+    for (page in paginate(nets)) {
+      compact_par(length(page), length(diag_names))
+      first <- TRUE
+      for (nm in page) {
+        for (dn in diag_names) {
+          graphics::matplot(x$netChain[nm, dn, , ], type = "l", lty = 1, col = chain_cols,
+                             xlab = "Iteration", ylab = dn, main = paste(nm, "-", dn), ...)
+          if (first) {
+            graphics::legend("topright", legend = paste("chain", seq_len(m)), col = chain_cols,
+                              lty = 1, cex = 0.6, bty = "n")
+            first <- FALSE
+          }
         }
       }
     }
