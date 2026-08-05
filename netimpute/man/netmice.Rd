@@ -49,12 +49,22 @@ an "unknown" tie).}
 cycling through both attributes and networks is a slower-mixing,
 more complex conditional model than attribute-only imputation).}
 
-\item{method}{Univariate imputation method, dispatched to the
-corresponding \code{mice::mice.impute.<method>()} function. One of
-`"pmm"` (default), `"midastouch"`, `"sample"`, `"cart"`, `"rf"`
-(requires \pkg{ranger} or \pkg{randomForest}), `"norm"`, `"norm.nob"`,
-`"norm.boot"`, `"norm.predict"`, or `"mean"` - the mice univariate
-methods whose working model handles a numeric response. Method-specific
+\item{method}{Univariate imputation method(s), dispatched to the
+corresponding \code{mice::mice.impute.<method>()} function. Each
+method is one of `"pmm"` (default), `"midastouch"`, `"sample"`,
+`"cart"`, `"rf"` (requires \pkg{ranger} or \pkg{randomForest}),
+`"norm"`, `"norm.nob"`, `"norm.boot"`, `"norm.predict"`, or `"mean"` -
+the mice univariate methods whose working model handles a numeric
+response. A single unnamed string applies one method globally. For
+per-target methods, supply a named character vector, mice-style: named
+entries assign a method to individual attributes/networks, and at most
+one unnamed entry sets the default for every target without its own
+entry (`"pmm"` if omitted). E.g.
+`method = c("cart", performance = "norm", friends = "pmm")` imputes
+`performance` with `norm`, the `friends` network with PMM, and
+everything else with trees. Names must be attribute columns or
+networks; entries for targets whose working model is fixed by design
+(see below) are ignored with a message. Method-specific
 tuning parameters (e.g. `cart`'s `minbucket`, `rf`'s `ntree`) use
 mice's defaults. The method applies to numeric attributes, to binary
 attributes (integer-coded; a regression-type method's continuous draws
@@ -273,7 +283,8 @@ order) as in `mice`.}
 An object of class `"netmids"` with elements: `data`, `net_list`
   (original, NA-preserving inputs, except that structurally absent cells
   are fixed at 0 and cells deduced from `net_dependence` are filled),
-  `m`, `maxit`, `method`, `donors`, `net_init`, `net_update`,
+  `m`, `maxit`, `method` (the resolved per-target method map: one named
+  entry per attribute/network), `donors`, `net_init`, `net_update`,
   `structural` (the
   per-network list of structural-zero matrices, or `NULL`),
   `net_dependence` (the normalized rule list, or `NULL`),
@@ -331,6 +342,18 @@ therefore effectively recomputed twice per full iteration - once when the
 network it depends on is (re-)imputed, and once when the attribute it
 depends on is (re-)imputed - and, because the visit order is randomized,
 not always in the same order.
+
+\strong{Estimation rule (identical to mice).} At every visit, the
+working model is estimated on the entries where the \emph{target} is
+observed - the target's own current imputations never enter its fit, at
+any sweep - while every predictor column is evaluated from the full
+current state of the data: the current imputations of all \emph{other}
+attributes and networks, and, for a network target, the endogenous
+statistics (`reciprocity`, `twopath`) computed from its own partly
+imputed matrix. Previously imputed information therefore informs every
+model at every sweep through the predictors, exactly as in
+\pkg{mice}'s fully conditional specification - netimpute simply
+generalizes which predictors exist, not how the models are estimated.
 
 \strong{Automatic dimensionality safeguard.} The auto-generated predictor
 set (structural + homophily measures across every network, for attribute
@@ -483,18 +506,26 @@ installed namespace. Use `ncores = 1` (default) during development.
 }
 
 \examples{
-\dontrun{
 set.seed(1)
-n <- 40
-friends <- matrix(rbinom(n * n, 1, 0.1), n, n); diag(friends) <- 0
-friends[sample(length(friends), 50)] <- NA
+n <- 30
+friends <- matrix(rbinom(n * n, 1, 0.15), n, n)
+diag(friends) <- 0
+# unknown ties are marked NA (off the diagonal)
+off <- which(row(friends) != col(friends))
+friends[sample(off, 40)] <- NA
+
 attrs <- data.frame(age = rnorm(n, 35, 8),
-                     performance = rnorm(n),
-                     gender = sample(c("F", "M"), n, TRUE),
-                     happiness = rnorm(n))
-attrs$happiness[sample(n, 5)] <- NA
-fit <- netmice(attrs, list(friends = friends), m = 3, maxit = 3,
-               models = list("happiness ~ indegree + age + performance * gender"))
-out <- complete_netmice(fit, 1)
+                    performance = rnorm(n),
+                    gender = sample(c("F", "M"), n, TRUE))
+attrs$performance[sample(n, 4)] <- NA
+
+# a few seconds: loading the imputation engine dominates the runtime
+\donttest{
+fit <- netmice(attrs, list(friends = friends), m = 2, maxit = 3,
+               seed = 1, printFlag = FALSE,
+               models = list("performance ~ indegree + age * gender"))
+fit
+completed <- complete_netmice(fit, 1)
+anyNA(completed$data)
 }
 }

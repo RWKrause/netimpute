@@ -21,3 +21,9 @@ computed as the mean of 1/d(i,j) over all ordered pairs i != j; since
 rather than `NaN`/`Inf` - only the (excluded) diagonal would otherwise
 cause a division by zero.
 }
+\examples{
+set.seed(1)
+m <- matrix(rbinom(400, 1, 0.15), 20, 20)
+diag(m) <- 0
+net_diagnostics(m)
+}

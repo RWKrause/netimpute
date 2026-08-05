@@ -134,9 +134,8 @@
 #'
 #' A "unit" is one whole predictor (an attribute spanning several dummy
 #' columns, one network feature, or one dyad-level term). `exempt` units are
-#' never dropped (a network target's endogenous reciprocity/twopath terms
-#' and the cross-network `*_tie`/`*_recip` terms, whose named coefficients
-#' carry substantive dependence structure). Two methods:
+#' never dropped (a network target's own endogenous reciprocity/twopath
+#' terms, which the imputation model always carries). Two methods:
 #' \describe{
 #'   \item{pairwise}{While any unit pair's max absolute between-column
 #'     correlation exceeds `threshold` (default 0.9), drop the member of the
@@ -268,9 +267,14 @@
 #' absolute correlation exceeds `collin_threshold` (default 0.9);
 #' `"vif"` repeatedly drops the predictor with the largest
 #' variance-inflation factor above `collin_threshold` (default 10),
-#' catching multi-variable collinearity; `"none"` disables pruning. A
-#' network target's `reciprocity`/`twopath` and cross-network
-#' `*_tie`/`*_recip` terms are never pruned.
+#' catching multi-variable collinearity; `"none"` disables pruning. Only a
+#' network target's own `reciprocity`/`twopath` terms are never pruned; the
+#' cross-network `*_tie`/`*_recip` terms are treated like every other
+#' candidate - a `z_ij` term enters only if it passes the `mincor` screen
+#' for the target `x_ij`, and is pruned when it is collinear (beyond
+#' `collin_threshold`) with a better predictor of the target, such as
+#' another network's `y_ij`, so exactly one carrier of a shared dyad-level
+#' signal survives with its own named coefficient.
 #'
 #' \strong{Targets and dropping.} `targets` names the variables/networks
 #' whose imputations you actually need. Every other variable or network
@@ -623,11 +627,16 @@ netquickpred <- function(data,
       frontier <- nxt
       s <- s + 1L
     }
-    # endogenous terms and cross-network cell terms keep their coefficients
-    # unconditionally (see the tie-inflation safeguards in netmice)
-    exempt <- c(endo,
-                sel_terms[scr$kind[sel_terms] == "net" &
-                            grepl("_(tie|recip)$", sel_terms)])
+    # only the target's own endogenous terms (reciprocity, twopath) are
+    # exempt from pruning. Cross-network cell terms (x_ij predicted by
+    # z_ij) compete like any other predictor: a z_ij that fails the mincor
+    # screen never enters, and one that is collinear (beyond the pruning
+    # threshold) with a better predictor of the target - another network's
+    # y_ij, or any stronger term - is dropped, keeping one carrier of the
+    # shared signal. (This is selection, not PCA absorption: whichever
+    # cross-network term survives still keeps its own named coefficient,
+    # so netmice's keep_raw tie-inflation safeguard is unaffected.)
+    exempt <- endo
     term_cols <- stats::setNames(as.list(match(sel_terms, names(scr$rel))),
                                  sel_terms)
     kept <- .qp_prune_units(sel_terms, term_cols, X = scr$X, Cmat = scr$cor,
@@ -701,7 +710,30 @@ netquickpred <- function(data,
   )
 }
 
+#' Print a netquickpred predictor selection
+#'
+#' Reports the screening settings and, for every target that will be
+#' imputed, the predictors selected for it - attributes and network
+#' features (with the step at which each entered) for an attribute target,
+#' dyad-level terms for a network target - plus any variables/networks
+#' dropped from the imputation entirely.
+#'
+#' @param x A `netquickpred` object from \code{\link{netquickpred}}.
+#' @param ... Ignored, for consistency with the generic.
+#' @return `x`, invisibly.
 #' @export
+#'
+#' @examples
+#' set.seed(1)
+#' n <- 60
+#' friends <- matrix(rbinom(n * n, 1, 0.1), n, n)
+#' diag(friends) <- 0
+#' attrs <- data.frame(age = rnorm(n, 35, 8))
+#' attrs$performance <- attrs$age / 10 + rnorm(n)
+#' attrs$performance[sample(n, 8)] <- NA
+#' qp <- netquickpred(attrs, list(friends = friends),
+#'                    targets = "performance", mincor = 0.4)
+#' print(qp)
 print.netquickpred <- function(x, ...) {
   cat("Class: netquickpred (per-target predictor selection)\n")
   cat("mincor:", x$mincor, " steps:", x$steps,

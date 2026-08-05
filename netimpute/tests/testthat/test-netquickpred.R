@@ -124,6 +124,44 @@ test_that("network targets are screened at the dyad level with endogenous
   expect_false(any(grepl("^junk_", e$dyad_terms)))
 })
 
+test_that("cross-network cell terms are screened and pruned like other predictors", {
+  set.seed(17)
+  n <- 40
+  y <- matrix(rbinom(n * n, 1, 0.25), n, n); diag(y) <- 0
+  # z is a near-duplicate of y (a few flipped cells): collinear with y_tie
+  z <- y
+  flip <- sample(which(row(z) != col(z)), 25)
+  z[flip] <- 1 - z[flip]
+  # the target's ties follow y's, with noise - y_tie is the better predictor
+  x <- y
+  xflip <- sample(which(row(x) != col(x)), 200)
+  x[xflip] <- 1 - x[xflip]
+  x[sample(which(row(x) != col(x)), 120)] <- NA
+  df <- data.frame(a = rnorm(n))
+  qp <- suppressMessages(netquickpred(df, list(x = x, y = y, z = z),
+                                      targets = "x", mincor = 0.15))
+  e <- qp$predictors$x
+  # (a) a cross-network term must pass the mincor screen to enter at all,
+  # and (b) of two collinear cross-network carriers, only the one that
+  # predicts the target better survives the pruning
+  expect_true("y_tie" %in% e$dyad_terms)
+  expect_false("z_tie" %in% e$dyad_terms)
+  # the target's own endogenous terms remain exempt
+  expect_true(all(c("reciprocity", "twopath") %in% e$dyad_terms))
+})
+
+test_that("cross-network cell terms below mincor are not selected", {
+  set.seed(18)
+  n <- 40
+  x <- matrix(rbinom(n * n, 1, 0.2), n, n); diag(x) <- 0
+  x[sample(which(row(x) != col(x)), 120)] <- NA
+  noise <- matrix(rbinom(n * n, 1, 0.2), n, n); diag(noise) <- 0
+  df <- data.frame(a = rnorm(n))
+  qp <- suppressMessages(netquickpred(df, list(x = x, noise = noise),
+                                      targets = "x", mincor = 0.3))
+  expect_false("noise_tie" %in% qp$predictors$x$dyad_terms)
+})
+
 test_that("`targets` keeps selected predictors and drops the rest", {
   set.seed(16)
   n <- 300

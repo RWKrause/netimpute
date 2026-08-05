@@ -42,9 +42,20 @@
 #' @export
 #'
 #' @examples
-#' \dontrun{
-#' fit <- netmice(attrs_miss, list(friends = friends_miss), m = 3, maxit = 20)
-#' plot(fit)                       # both pages
+#' set.seed(1)
+#' n <- 25
+#' friends <- matrix(rbinom(n * n, 1, 0.15), n, n)
+#' diag(friends) <- 0
+#' off <- which(row(friends) != col(friends))
+#' friends[sample(off, 30)] <- NA
+#' attrs <- data.frame(age = rnorm(n, 35, 8),
+#'                     gender = sample(c("F", "M"), n, TRUE))
+#' attrs$age[sample(n, 4)] <- NA
+#'
+#' \donttest{
+#' fit <- netmice(attrs, list(friends = friends), m = 2, maxit = 5,
+#'                seed = 1, printFlag = FALSE)
+#' plot(fit)                       # attribute and network pages
 #' plot(fit, nets = character(0))  # attributes only
 #' }
 plot.netmids <- function(x, vars = NULL, nets = NULL, ask = interactive(), max_rows = 4L, ...) {

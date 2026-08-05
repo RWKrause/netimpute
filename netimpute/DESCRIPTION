@@ -1,6 +1,6 @@
 Package: netimpute
 Type: Package
-Title: Node-Level Network Measures as Predictors for Multiple Imputation
+Title: Joint Multiple Imputation of Network Ties and Node Attributes
 Version: 0.1.0
 Authors@R: c(
     person(
@@ -9,21 +9,44 @@ Authors@R: c(
       role = c("aut", "cre")
     )
   )
-Description: Imputes networks and nodal attributes with multiple imputation by chained equations. Given a list of at least one network and one or more attributes, the package impute the missing network ties using network and attribute derived dyadic and nodal level features and imputes attributes using network feautures and attributes of network alters. The package can handle multiple networks and many attributes. If the amount of attriubtes and network feaures becomes too many, users can uce PCA to reduce the predictor set. Specific network predictors can be chosen from a list of 28 features and many attribute measures. Imptuation models can be directly defined, data driven, or rely on all available data. Interactions in imputation are possible, based on attributes, attribute-network interactions, or network features. Note that the package does create a lot of variables internally, therefore, please check the naming convention in the package to make sure that it does not clash with your variable names.
+Description: Imputes networks and nodal attributes with multiple imputation
+    by chained equations. Given a list of at least one network and one or
+    more attributes, the package imputes the missing network ties using
+    network- and attribute-derived dyadic and nodal features, and imputes
+    the attributes using network features and the attributes of network
+    alters. Multiple networks and many attributes can be handled. If the
+    number of attributes and network features becomes too large, users can
+    reduce the predictor set with principal component analysis (PCA) or
+    have predictors selected per target. Specific network predictors can be
+    chosen from a list of 28 features and many attribute measures.
+    Imputation models can be directly specified, data driven, or rely on
+    all available data. Interactions in the imputation models are possible,
+    based on attributes, attribute-network interactions, or network
+    features. Note that the package creates many variables internally;
+    please check the naming conventions in the documentation to make sure
+    that they do not clash with your own variable names. The methods build
+    on the chained equations approach of van Buuren and Groothuis-Oudshoorn
+    (2011) <doi:10.18637/jss.v045.i03> and, for the tie model, on the
+    multiple regression quadratic assignment procedure of Krackhardt (1988)
+    <doi:10.1016/0378-8733(88)90004-4>.
 License: GPL (>= 3)
+URL: https://github.com/RWKrause/netimpute
+BugReports: https://github.com/RWKrause/netimpute/issues
 Encoding: UTF-8
-LazyData: true
+Depends: R (>= 3.6.0)
 Imports:
     igraph,
     mice,
     graphics,
-    grDevices
+    grDevices,
+    stats
 Suggests:
     sna,
     network,
     future,
     nnet,
     lme4,
+    utils,
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
 Config/roxygen2/version: 8.0.0

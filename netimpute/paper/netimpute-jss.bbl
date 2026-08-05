@@ -15,10 +15,19 @@ Csardi, G. and Nepusz, T. (2006).
 \newblock The {igraph} software package for complex network research.
 \newblock In {\em InterJournal, Complex Systems}, page 1695.
 
+\bibitem[Hollway, 2021]{manynet}
+Hollway, J. (2021).
+\newblock {\em manynet: Many Ways to Make and Modify Myriad Networks}.
+
 \bibitem[Huisman, 2009]{Huisman2009}
 Huisman, M. (2009).
 \newblock Imputation of missing network data: Some simple procedures.
 \newblock {\em Journal of Social Structure}, 10(1):1--29.
+
+\bibitem[Huisman and Steglich, 2008]{huisman2008}
+Huisman, M. and Steglich, C. (2008).
+\newblock Treatment of non-response in longitudinal network studies.
+\newblock {\em Social networks}, 30(4):297--308.
 
 \bibitem[Koskinen et~al., 2010]{Koskinen2010}
 Koskinen, J.~H., Robins, G.~L., and Pattison, P.~E. (2010).

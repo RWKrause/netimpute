@@ -3,3 +3,9 @@
 ^dev$
 ^paper$
 ^LICENSE\.md$
+^\.RData$
+^\.Rhistory$
+^cran-comments\.md$
+^\.github$
+^.*\.Rcheck$
+^.*\.tar\.gz$

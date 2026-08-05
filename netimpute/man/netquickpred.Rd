@@ -126,9 +126,14 @@ repeatedly drops the less relevant member of any predictor pair whose
 absolute correlation exceeds `collin_threshold` (default 0.9);
 `"vif"` repeatedly drops the predictor with the largest
 variance-inflation factor above `collin_threshold` (default 10),
-catching multi-variable collinearity; `"none"` disables pruning. A
-network target's `reciprocity`/`twopath` and cross-network
-`*_tie`/`*_recip` terms are never pruned.
+catching multi-variable collinearity; `"none"` disables pruning. Only a
+network target's own `reciprocity`/`twopath` terms are never pruned; the
+cross-network `*_tie`/`*_recip` terms are treated like every other
+candidate - a `z_ij` term enters only if it passes the `mincor` screen
+for the target `x_ij`, and is pruned when it is collinear (beyond
+`collin_threshold`) with a better predictor of the target, such as
+another network's `y_ij`, so exactly one carrier of a shared dyad-level
+signal survives with its own named coefficient.
 
 \strong{Targets and dropping.} `targets` names the variables/networks
 whose imputations you actually need. Every other variable or network

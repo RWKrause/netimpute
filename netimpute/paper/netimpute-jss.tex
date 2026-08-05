@@ -1,16 +1,4 @@
 \documentclass[11pt,a4paper]{article}
-
-% ---------------------------------------------------------------------------
-% NOTE ON THE DOCUMENT CLASS
-% This uses the standard article class formatted to follow JSS (Journal of
-% Statistical Software) manuscript conventions as closely as reasonably
-% possible without the official jss.cls/jss.bst files, which were not
-% available in the environment this was written in. Before an actual JSS
-% submission, replace the preamble below with jss.cls and jss.bst obtained
-% from the JSS author instructions (https://www.jstatsoft.org), and verify
-% every bibliographic entry in netimpute.bib against the original sources.
-% ---------------------------------------------------------------------------
-
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
 \usepackage{amsmath,amssymb}
@@ -68,14 +56,13 @@ attributes and the network ties themselves. Standard multiple imputation softwar
 \pkg{mice} \citep{vanBuuren2011} handles the former well but has no notion of
 network structure, while dedicated network-imputation procedures typically
 treat tie imputation and attribute imputation as separate problems. This
-paper introduces \pkg{netimpute}, an \proglang{R} package that (i) computes a
-broad battery of node-level structural and attribute-scale-appropriate
-homophily measures across one or more networks, (ii) can reduce these to a
+paper introduces \pkg{netimpute}, an \proglang{R} package that (a) computes a
+broad battery of node-level structural and attribute
+homophily measures across one or more networks, (b) can reduce these to a
 manageable set of principal-component predictors while optionally preserving
-specific raw measures that are themselves part of a substantive hypothesis,
-(iii) provides a dyadic (cell-level) regression for network ties in the
-spirit of MR-QAP \citep{Krackhardt1988} but fitted directly rather than by
-permutation, and (iv) combines both into \code{netmice()}, a chained-equations
+specific raw measures that are themselves part of substantive hypotheses,
+(c) provides a dyadic (cell-level) regression for network ties in the
+spirit of MR-QAP \citep{Krackhardt1988}, and (d) combines both into \code{netmice()}, a chained-equations
 routine that jointly imputes missing node attributes and missing network ties
 by cycling between them, using network-derived predictors for attributes and
 attribute-derived (and other-network-derived) predictors for ties. Network
@@ -99,17 +86,15 @@ MR-QAP, Gibbs sampling.
 \section{Introduction}
 \label{sec:intro}
 
-Two kinds of missingness arise in studies involving networks, and they are
+Two kinds of missingness arise in studies involving networks, which are
 usually
-handled by entirely different tools. Missing values on \emph{node attributes}
+handled by different tools. Missing values on \emph{node attributes}
 (age, performance, survey responses, etc.) are the domain of general-purpose
 multiple
 imputation (MI) software, most prominently \pkg{mice}
 \citep{vanBuuren2011}, which implements the fully conditional
 specification / chained equations approach to MI
-\citep{Rubin1987,LittleRubin2002}. Missing \emph{network ties} --- arising
-from partial rosters, non-response to a name-generator question, or
-top-coded nomination limits --- are instead the subject of a smaller,
+\citep{Rubin1987,LittleRubin2002} or model based likelihood treatments (e.g., FIML). Missing \emph{network ties} are instead the subject of a smaller,
 more specialized literature on network imputation
 \citep{Huisman2009,Koskinen2010,Krause2018,Krause2020}, often developed
 alongside exponential random
@@ -121,23 +106,20 @@ but neither is implemented as a general-purpose, formula-extensible \proglang{R}
 package. They are also limited in the number of network relations and attributes
 they can handle.
 
-In practice, the two kinds of missingness are rarely independent
+In practice, these two kinds of missingness are rarely independent
 problems. A respondent who did not answer the attribute survey is often the
 same respondent whose outgoing nominations are also missing; and the
-node-level measures researchers use to \emph{explain} attributes (e.g.\ is a
+node-level measures researchers use to \emph{explain} attributes (e.g., is a
 central employee also a high performer?) are themselves undefined until the
 network is complete, while the covariates used to predict a missing tie
-(e.g.\ do two employees in the same department reciprocate ties more often?)
+(e.g., do two students share a gender or interest?)
 are undefined until the attributes are complete. Imputing one without
 regard to the other risks two failure modes: treating an incomplete network
 as if it were complete when computing network derived predictors for
 attribute imputation, and treating incomplete attributes as if observed when
-building the dyadic covariates used to impute ties.
+building the dyadic covariates used to impute ties. Any imputation focused only on one side of this problem works only conditional on the other missing data being irrelevant.
 
-\pkg{netimpute} addresses this by keeping node-level measures, dyadic
-regression, and the imputation loop itself in one package built around a
-single, consistent representation of the two data types: a node attribute
-data frame and a (possibly weighted) adjacency matrix. While the imputation of
+\pkg{netimpute} addresses this by combining the imputation of attributes and network ties together in one function. While the imputation of
 the networks is not as thorough as a full model-based approach (e.g., using
 SAOMs or ERGMs), it is designed to be fast and scalable to multiple networks and
 attributes, while still capturing the essential dependencies between them.
@@ -165,37 +147,33 @@ node- and network-level measures, and \pkg{netimpute} builds directly on
 source of a handful of additional centrality measures (Gil-Schmidt power,
 flow/load/stress centrality, information centrality, and prestige) that
 \pkg{igraph} does not provide. Neither package, however, is designed for
-missing data: both assume a fully observed network.
+missing data: both assume a fully observed network. The same is true for most functions in the new \pkg{manynet} package \citep{manynet} and its sister packages.
 
 On the imputation side, \pkg{mice} \citep{vanBuuren2011} is the standard
 \proglang{R} implementation of chained-equations MI and is used internally
-by \pkg{netimpute} as the workhorse for the actual univariate imputation
-step (by default predictive mean matching for numeric and binary targets,
+by \pkg{netimpute} as the engine for the actual univariate imputation
+step. By default it uses predictive mean matching for numeric and binary targets,
 with \pkg{mice}'s other numeric-response univariate methods selectable
-through the same \code{method} argument; multinomial
+through the same \code{method} argument and multinomial
 logistic regression via \code{mice::mice.impute.polyreg()}, which in turn
 relies on \pkg{nnet} \citep{Venables2002}, for nominal attributes with more
-than two categories). \pkg{netimpute} does not reimplement this machinery;
-it instead builds the network-aware predictor matrices that get handed to
-it, and generalises \pkg{mice}'s single chained-equations loop over
-attributes to a single loop over both attributes and networks.
+than two categories.
 
 Prior work on missing network data \citep{Huisman2009,Krause2020} has
 established that simple treatments (listwise deletion, treating a missing
 tie as absent) can materially bias network-level statistics, and has
-proposed reconstruction procedures based on the observed structure. These
-procedures generally do not draw on node attributes as predictors, and are
+proposed imputation procedures based on the observed structure. These
+procedures are
 not implemented as a general-purpose, formula-extensible \proglang{R}
-package; \pkg{netimpute}'s dyadic regression step can be seen as a simple,
-non-permutation-based point-prediction analogue of MR-QAP
+packages; \pkg{netimpute}'s dyadic regression step can be seen as a simple, point-prediction analogue of MR-QAP
 \citep{Krackhardt1988} used specifically to build a predictive (rather than
-inferential) model for tie imputation. The default tie-wise updating scheme
+inferential, and thus avoiding the need for permutation) model for tie imputation. The default tie-wise updating scheme
 inside \code{netmice()} (Section~\ref{sec:netmice}) additionally borrows
 from the exponential-random-graph-model tradition \citep{Robins2007}: each
 missing tie is redrawn from its full conditional distribution given the
 current state of every other tie --- a Gibbs update of an ERGM-style model
 whose parameters are estimated by pseudo-likelihood --- while remaining
-restricted to the missing cells, so observed ties are never resampled.
+restricted to the missing cells, so observed ties are never resampled. This is not seen as a replacement or improvement upon proper ERGM-based (or SAOM-based) imputations, but rather as a fast, scalable, and easy to use way to capture the essential dependencies between ties, attributes, and networks for the purpose of imputation.
 
 \section{The \pkg{netimpute} package}
 \label{sec:package}
@@ -209,7 +187,7 @@ in-degree, a reciprocity measure, Bonacich power centrality (with an
 automatically rescaled exponent so it converges regardless of the network's
 spectral radius), normalised betweenness, an isolate indicator, Burt's
 constraint \citep{Burt1992}, harmonic closeness, and local clustering ---
-together with, for every column of \code{attributes}, a
+together with, for every \code{attribute}, a
 scale-appropriate homophily/alter-similarity block: an E-I index, Blau's
 index, and the modal alter category for binary or multinomial attributes;
 average absolute difference on outgoing and on incoming ties, the
@@ -220,60 +198,52 @@ incoming and over outgoing ties separately, for continuous attributes.
 holes measures, coreness, and, if \pkg{sna} is installed, its six
 additional measures) using exactly the same homophily block.
 
-Both functions are thin wrappers around a single selectable entry point,
-\code{net\_measures(net, attributes, measure\_set)}: \code{measure\_set}
+Both functions are wrappers around  \code{net\_measures(net, attributes, measure\_set)}: \code{measure\_set}
 accepts any mix of the named sets \code{"core"} and \code{"full"}, the
 per-attribute \code{"homophily"} block, and individual measure names, and
 returns their union --- e.g.\ \code{measure\_set = c("core",
 "total\_degree", "pagerank")} computes the core battery plus two extras,
 while \code{c("indegree", "betweenness")} computes exactly those two
-measures and nothing else (in which case \code{attributes} may be omitted).
+measures and nothing else.
 Every implemented measure is enumerated in the \code{net\_measures()} and
-\code{netmice()} help pages. Internally, each measure is a small function in
-a registry, and shared intermediate quantities (the dyad-reciprocity
-tabulation, structural-holes statistics, adjacency matrices) are computed
-lazily and at most once per call, so the cost of a call scales with the
-measures actually requested. The same \code{measure\_set} argument is
+\code{netmice()} help pages. The same \code{measure\_set} argument is
 accepted by \code{net\_predictors()}, \code{netquickpred()}, and
 \code{netmice()}, which use these measures as attribute-imputation
 predictors.
 
 Only binary (0/1) and non-negative weighted networks are currently
-supported; supplying a network with a negative tie value raises an
-informative error rather than silently producing an ill-defined result
+supported. Supplying a network with a negative tie value raises an
+error and it is currently recommended to split signed networks into two non-negative networks (e.g., ``friendship'' and
+``antagonism'') for separate imputation, and recombine them afterwards
 (Section~\ref{sec:discussion}). For non-negative weighted networks, two
-measures are redefined rather than computed on a nonsensical binarisation:
-reciprocity becomes the average $|w_{ij} - w_{ji}|$ over alters tied in
-either direction (in the original weight units, with \emph{lower} values
-now indicating \emph{more} reciprocal ties, the opposite direction from the
-binary $[0,1]$ ratio), and local clustering becomes the geometric-mean
+measures are redefined:
+reciprocity of a node becomes the average $|w_{ij} - w_{ji}|$ over alters tied in
+either direction, and local clustering becomes the geometric-mean
 weighted clustering coefficient of \citet{OpsahlPanzarasa2009}: for node
 $i$ and each pair of its neighbours $(j,k)$, the two-path value
 $\sqrt{w_{ij} w_{ik}}$ is summed over every such pair to form a denominator,
 and over only the pairs where the triangle is actually closed ($j$ and $k$
 are themselves tied) to form the numerator. This ratio reduces exactly to
-the ordinary binary clustering coefficient when all weights equal 1.
+the  binary clustering coefficient when all weights equal $1$.
 
 \subsection{Predictors for imputation}
 \label{sec:predictors}
 
 \code{net\_predictors()} applies \code{net\_measures\_core()} or
 \code{net\_measures\_full()} across a list of networks (and a matching list
-of attribute data frames sharing the same schema), stacks the results, and
-offers three output modes. \code{output = "measures"} returns the stacked
+of attribute data frames), stacks the results, and
+offers three output modes: \code{output = "measures"} returns the stacked
 raw measures. \code{output = "pca"} instead returns the first
-\code{n\_components} principal components of the (mean-imputed,
-centred/scaled) measure matrix, addressing the multicollinearity that is
+\code{n\_components} principal components of the measure matrix, addressing the multicollinearity that is
 otherwise inevitable once a dozen or more structural and homophily measures
-are computed per network. \code{output = "both"} returns the principal
+are computed per network and the inflation of predictors, which can quickly exceed the $N$ in small networks. \code{output = "both"} returns the principal
 components \emph{and} a user-specified set of raw measures
 (\code{keep\_vars}), preserved untransformed; this is for the situation
 where a specific measure --- say, out-degree --- is itself part of a
 hypothesised relationship (i.e., a predictor in a regression) the analyst does
-not want diluted by folding it
-into a composite component, optionally with the remaining predictors first
-residualised on \code{keep\_vars} (\code{residualize\_kept = TRUE}) so the
-components capture variance orthogonal to it.
+not want diluted by including it
+into a composite component, which can also be resiudalised on the remaining predictors so the
+components capture variance orthogonal to it (\code{residualize\_kept = TRUE}) .
 
 \subsection{Dyadic regression}
 \label{sec:dyad}
@@ -281,33 +251,23 @@ components capture variance orthogonal to it.
 \code{dyad\_regression()} vectorises a target network's adjacency matrix
 (excluding the diagonal) and regresses it on: for every node attribute, an
 ego value, an alter value, and either an absolute difference (continuous
-attributes) or a same-category indicator (categorical attributes) --- the
-absolute difference is used rather than the signed difference because the
-latter is an exact linear combination of the ego and alter columns already
-in the model; reciprocity (the
+attributes) or a same-category indicator (categorical attributes); reciprocity (the
 transposed target network); a bounded $0/1$ two-path indicator
 (\code{twopath} --- ``at least one shared contact'', i.e.\ at least one
-path $i \to k \to j$), deliberately an indicator rather than a (log) count
-so that, inside the imputation loop, ties imputed in earlier sweeps cannot
-push a closure statistic upward without limit; and, for every
-\emph{other} network supplied, its tie value, its reciprocity (transpose),
+path $i \to k \to j$); and, for every
+\emph{other} network supplied, its tie value, its reciprocity (transpose), and
 the sender's and the receiver's out- and in-degree in that network. When
 many other networks are supplied, \code{other\_net\_predictors = "pca"}
 replaces the node-level degree terms with the first \code{n\_components}
-principal components; the dyad-level cross-network terms (the other
-network's cell and its transpose) always keep their own named coefficients,
-since the target's $x_{ij}$ being predicted by another network's $z_{ij}$
-is exactly the cross-network association the model should carry
-explicitly. The complete list of term names, as referenced from
+principal components; by default the dyad-level cross-network terms (the other
+network's cell and its transpose) always keep their coefficients,
+to preserve the direct relationship between the networks. The complete list of term names, as referenced from
 \code{netmice()}'s \code{models} formulas, is documented in the
 \code{dyad\_regression()} help page. Dyads marked \emph{structurally
-absent} (zero by design, e.g.\ nominations the study design made
-impossible; argument \code{structural}) are removed from the dyad data
-entirely, like the diagonal, so design-zeros cannot inflate the zeros of
-the fitted model. The model is fit by \code{glm()} with a user-specified
-\code{family} (default Gaussian) on dyads with an observed tie value; dyads
-with an unknown value (\code{NA}) are left out of the fit but can be
-predicted from it. Alternatively, \code{random\_intercepts} fits the model
+absent} (zero by design, e.g., nominations the study design made
+impossible; argument \code{structural}) are removed internally from the dyad data
+entirely, like the diagonal. The model is fit by \code{glm()} with a user-specified
+\code{family} (default Gaussian). Alternatively, \code{random\_intercepts} fits the model
 with \pkg{lme4}, adding social-relations-model-style random intercepts per
 sender (\code{"ego"}), per receiver (\code{"alter"}), and/or per unordered
 pair (\code{"dyad"}; directed networks only --- for an undirected target
@@ -325,7 +285,7 @@ rather than a permutation-based significance test/inference.
 \code{netquickpred()} is a network-aware, recursive generalisation of
 \code{mice::quickpred()}. For every target with missing values it screens
 candidate predictors by absolute pairwise-complete correlation --- with the
-target's observed values and, like \code{quickpred()}, with its missingness
+target's observed values and, like \code{mice::quickpred()}, with its missingness
 indicator --- against a threshold \code{mincor} (default $0.1$). For
 attribute targets the candidates are the other attributes plus every
 node-level network measure of Section~\ref{sec:measures} (computed on the
@@ -337,26 +297,24 @@ Because a
 selected predictor's own missing values are imputed inside the chain, the
 selection then recurses: with \code{steps = 3} (default), the direct
 predictors, their predictors, and the predictors of those all enter the
-target's model, with the recursion descending only into predictors that
-themselves have missing data. Finally, near-duplicate survivors are pruned
+target's model. Finally, near-duplicate survivors are pruned
 per target, either by pairwise correlation (default, threshold $0.9$) or by
 variance-inflation factor (threshold $10$), with a network target's
-endogenous and cross-network cell terms exempt from pruning. The result
+endogenous predictors exempt from pruning. The result
 object reports, for every target, exactly which predictors were selected at
 which step and with what screening correlation; handed to \code{netmice()}
 (or requested there directly via \code{predictor\_selection =
 "quickpred"}), it replaces the everything-plus-PCA default of
-Section~\ref{sec:netmice} with lean, target-specific models in which every
+Section~\ref{sec:netmice} with target-specific models in which every
 coefficient keeps its own name. A companion argument, \code{targets}, names
 the variables/networks whose imputations are actually needed: everything
-else with missing data that is not selected as a (recursive) predictor is
-dropped from the imputation entirely, saving computation.
+else with missing data that is not selected as a (recursive) predictor, target, or explicitly included in an imputation model is
+dropped from the imputation algorithm entirely, saving computation time and avoiding that the model gets flooded with irrelevat predictors.
 
 \subsection{Joint imputation}
 \label{sec:netmice}
 
-\code{netmice(data, net\_list, m = 5, maxit = 20, method = "pmm", donors =
-5, \ldots)} is a chained-equations routine, architecturally modelled on
+\code{netmice()} is a chained-equations routine, architecturally modelled on
 \pkg{mice}'s own sampler, generalised to cycle through both attributes and
 networks. Within one iteration, every attribute and every network with
 missing values is visited exactly once, in a single interleaved sequence
@@ -369,48 +327,32 @@ most recently updated. Because these predictors depend on \emph{the other}
 data type, they are never cached: a variable that depends on both a network
 and an attribute is effectively recomputed at both points in the cycle.
 
-Each chain starts from a deliberately conservative state: missing attribute
+Each chain starts from a conservative state: missing attribute
 values are initialised by resampling observed values, but missing ties are
 initialised to $0$ (``no tie''; \code{net\_init = "zero"}), so the first
 sweep's endogenous predictors --- reciprocity, two-paths, other networks'
 tie and degree terms --- are built from observed ties only. This biases the
-very first sweep's structural terms downward, but cannot seed a
-self-reinforcing surplus of random initial ties that later sweeps amplify
-(an ERGM-degeneracy-like failure mode we observed with resampling starts:
-endogenous statistics recomputed from partly imputed matrices can feed back
-into ever more imputed ties). A density-based initial imputation is
-available as \code{net\_init = "sample"}.
+very first sweep's structural terms downward, but avoids seeding a
+self-reinforcing surplus of random initial ties that later sweeps amplify. A density-based initial imputation is available as \code{net\_init = "sample"}.
 
 \paragraph{Tie-wise updating.} A network visit updates its missing cells
 \emph{tie-wise} by default (\code{net\_update = "gibbs"}). A working model
-is fit once per visit on the observed dyads --- logistic regression for a
+is fit once per visit --- logistic regression for a
 binary network, linear regression otherwise --- and one coefficient vector
 is drawn from its asymptotic posterior, mirroring \pkg{mice}'s Bayesian
 $\beta$-draw so that between-imputation variability reflects estimation
 uncertainty. The missing cells are then visited one at a time in random
 order; each cell's linear predictor is evaluated with the \emph{current}
-values of the endogenous statistics --- the reciprocity cell $y_{ji}$, read
-off the live matrix in $O(1)$, and the two-path indicator, from a running
-two-path count matrix --- which are refreshed after every single draw via
-change statistics (toggling cell $(i,j)$ only alters two-path counts of
-pairs running through $i$ or $j$: two $O(n)$ vector updates, never a full
-$O(n^3)$ recomputation). A binary tie is then drawn from
+values of the endogenous statistics. A binary tie is then drawn from
 $\mathrm{Bernoulli}(\mathrm{logit}^{-1}(\eta))$; a weighted tie by
 predictive mean matching against the observed dyads' fitted values. Each
 draw therefore conditions on all previously imputed ties: this is exactly
 the full-conditional (Gibbs) update of an ERGM whose parameters were
-estimated by pseudo-likelihood, restricted to the missing cells --- observed
-ties are never resampled. It yields properly dependent within-network
+estimated by pseudo-likelihood restricted to the missing cells. It yields properly dependent within-network
 imputations and avoids potential synchronous-update artifacts of the alternative
-scheme, \code{net\_update = "simultaneous"}, in which one PMM working model
-per visit imputes every missing cell at once from the same stale snapshot
-of the statistics. Static predictor columns (attribute terms, other-network
-terms, \code{models} extras) are evaluated once per visit and held fixed
-during the sweep; only the endogenous terms --- and any \code{models}
-interaction involving them --- are updated per draw. Note that tie-wise
-updating does not, by itself, rule out ERGM-style degeneracy (that is a
-property of the statistics); the bounded $0/1$ \code{twopath} indicator of
-Section~\ref{sec:dyad} is the main safeguard there.
+scheme, \code{net\_update = "simultaneous"}, in which one model
+per visit imputes every missing cell at once from the same snapshot
+of the statistics (e.g., if both $x_{ij}$ and $x_{ji}$ are missing, their imputation would be independent of each other).
 
 Under the simultaneous scheme, the tie working model can instead be a
 linear mixed model (\code{net\_random\_intercepts}): random intercepts per
@@ -421,15 +363,14 @@ predictive mean matching on the conditional fitted values. Random
 intercepts require the simultaneous scheme: setting
 \code{net\_random\_intercepts} while leaving \code{net\_update} at its
 default falls back to \code{"simultaneous"} with a message, whereas
-combining it with an explicit \code{net\_update = "gibbs"} is an error.
+combining it with an explicit \code{net\_update = "gibbs"} is an error. Note of course that using random intercepts is only meaningful if missing ties are tie non-response and not actor non-response \citep{huisman2008}, since the latter means that all data for the random intercept of a missing node are missing.
 
 \paragraph{Structural zeros and between-network constraints.} Two further
 arguments restrict where ties may exist at all. \code{structural} marks
 cells that are zero \emph{by design} (e.g., nominations into another school
-class that respondents could not make): such cells are fixed at $0$
-throughout --- never imputed, excluded from the initialisation donor pool,
+class that respondents could not make): such cells are excluded from the initialisation donor pool,
 and removed from the dyad-level regression rows, so design-zeros cannot
-inflate the zeros of the working model. \code{net\_dependence} declares
+inflate the zeros of the model. \code{net\_dependence} declares
 \emph{adaptive} logical constraints between networks: \code{necessary}
 rules (``a tie in $A$ is required for a tie in $B$'') and \code{forbidden}
 rules (``ties in $A$ and $B$ are mutually exclusive''). Before the chains,
@@ -437,19 +378,19 @@ missing cells already determined by observed cells are deduced and filled
 (with observed contradictions raising an error); at every visit of a
 constrained network, its cells currently determined to be $0$ by the
 partners' \emph{current} --- possibly imputed --- state are treated exactly
-like structural cells for that visit; and after every network
-re-imputation the rules are propagated to a fixpoint, so every completed
+like structural cells for that visit (i.e., fixed to zero and removed from the estimation); and after every network
+re-imputation the rules are followed, so every completed
 network list satisfies every rule.
 
-An attribute's predictor set includes the homophily block built from the
+\paragraph{Attributes.} An attribute's predictor set includes the homophily block built from the
 target attribute itself, not only from the other attributes: under
 homophily or social influence, the composition of a node's alters on the
-very variable being imputed (its mean alter value, and in particular the
+ variable being imputed (its mean alter value, and in particular the
 mean over \emph{incoming} ties, which rest on other --- typically observed
 --- nodes' reports) is among the strongest predictors available. The only
 measures withheld when imputing an attribute are those that are direct
 functions of ego's own current value of that attribute (its E-I index and
-the two average-absolute-difference terms), since regressing a variable on
+the average-absolute-difference terms), since regressing a variable on
 a transform of itself would anchor imputed values to their own previous
 draws rather than to information from the rest of the data.
 
@@ -465,36 +406,20 @@ the Bayesian and bootstrap linear-regression family (\code{"norm"},
 \code{"norm.nob"}, \code{"norm.boot"}, \code{"norm.predict"}), and
 \code{"mean"} (the latter two are deterministic and therefore improper for
 multiple imputation, as \pkg{mice}'s own documentation cautions).
-Method-specific tuning parameters keep \pkg{mice}'s defaults. A binary
-attribute is integer-coded, imputed with the same method, and mapped back
-to its two labels; donor- and tree-based methods return observed codes
-as-is, while a regression-type method's continuous draws are rounded and
-clamped to the two valid codes first. Two working models are fixed by
-design regardless of \code{method}: nominal attributes with more than two
-categories always use multinomial logistic regression
-(\code{mice.impute.polyreg()}), avoiding the alternative of imposing an
-arbitrary numeric ordering on the categories, and ties under the default
-tie-wise scheme are drawn from the sequential updater's own working model
-as described above --- \code{method} governs tie draws only under the
-simultaneous scheme (where, for a binary network, a donor- or tree-based
-method is preferable, since a regression-type method can impute non-binary
-tie values).
+\code{method} may also be a named character vector assigning
+\emph{per-target} methods, \pkg{mice}-style: named entries set the method
+for individual attributes or networks, and at most one unnamed entry sets
+the default for the rest --- e.g.\ \code{method = c("cart", performance =
+"norm")} imputes \code{performance} by Bayesian linear regression and
+everything else by trees. Entries naming a multinomial attribute, or a
+network whose ties are updated tie-wise or with random intercepts, are
+ignored with a message, since those targets' working models are fixed by
+design.
 
 Because the auto-generated predictor set can plausibly approach or exceed
 the number of observed cases available for a given target --- several
 networks' worth of structural and homophily measures adds up quickly
-relative to a modest number of nodes --- \code{netmice()} applies the same
-fix offered explicitly through \code{net\_predictors(output = "pca")}
-automatically inside the loop: the auto-generated predictors are capped at
-$\max(5, \lfloor n_{\text{observed}}/3 \rfloor)$ columns, reducing to that
-many principal components when exceeded. A network target's own
-\code{reciprocity}/\code{twopath} terms and the cross-network cell terms
-are exempt --- they always keep their own named coefficients. The cap does
-not apply to predictors a user has explicitly requested via \code{models}
-(see below), which are treated as a deliberate choice; and with
-\code{predictor\_selection = "quickpred"}
-(Section~\ref{sec:netquickpred}), the selection itself keeps each model
-lean, leaving the cap as a rank fallback only.
+relative to a modest number of nodes --- \code{netmice()} follows the same variable reductions as described above.
 
 A specific, hypothesised relationship can be protected from dilution or
 omission via the \code{models} argument, a list of formula strings whose
@@ -514,8 +439,7 @@ matrix state after every single tie draw, so the interaction stays live
 throughout the sequential sweep. The full lists of referenceable dyad-level
 term names and of implemented network measures are given in dedicated
 sections of the \code{netmice()} help page. Variables and networks a
-formula depends on --- directly or through a derived term such as
-\code{advice\_tie} --- are automatically protected from being dropped by
+formula depends on are automatically protected from being dropped by
 the \code{targets} mechanism, so the formula stays evaluable at every
 visit.
 
@@ -527,7 +451,7 @@ identical whether run sequentially or in parallel given the same
 algorithm for proper parallel streams, which would silently change results
 if the seed value were reused as-is). \code{netmice()} returns an object of
 class \code{netmids} recording, in parallel to \pkg{mice}'s own convergence
-diagnostics, the mean and variance of each imputed (not observed) attribute
+diagnostics, the mean and variance of each imputed attribute
 value across iterations, and, for every network, its density, reciprocity,
 transitivity, isolate count, and average inverse geodesic distance at every
 iteration.
@@ -538,7 +462,7 @@ iteration.
 The example below simulates a 40-node organisation with two networks (a
 binary friendship network and a Poisson-weighted advice network) and four
 attributes spanning all three supported scales (continuous, binary,
-multinomial). Numbers below are the actual output of running this code with
+multinomial). Numbers below are the output of running this code with
 \proglang{R}~4.6.1 and \pkg{netimpute}~0.1.0; the full script (which also
 shows the informational messages about inferred attribute types omitted
 here) ships as \code{paper/example\_run.R}. Output lines longer than the
@@ -739,11 +663,10 @@ and is thus protected.
 
 \textbf{Signed networks are not yet supported.} Several of the measures in
 Section~\ref{sec:measures} are path-based (betweenness, closeness) and
-require non-negative edge costs, while others (the weighted reciprocity and
+require non-negative edges, while others (the weighted reciprocity and
 clustering formulas above) assume weights are magnitudes rather than
 signed valences; \pkg{netimpute} currently rejects any network with a
-negative tie value with an explicit error rather than silently producing
-an ill-defined result. Extending the package to signed networks would
+negative tie value. Extending the package to signed networks would
 require, at minimum, separate treatment of positive and negative sub-graphs
 for the path-based measures and a structural-balance-aware notion of
 reciprocity and clustering, which we leave to future work. Until then, it is
@@ -754,38 +677,30 @@ positive and a negative side and use the \code{net\_dependence} argument  with
 \textbf{Endogenous tie statistics.} The tie-wise updater currently
 conditions on two endogenous statistics, reciprocity and the bounded
 two-path indicator, recomputed from the partly imputed matrices at every
-visit. Natural extensions include statistics computed from \emph{observed}
-ties only (immune to feedback from imputed cells, at the cost of ignoring
-them), geometrically down-weighted shared-partner statistics in the spirit
+visit. Natural extensions include geometrically down-weighted shared-partner statistics in the spirit
 of GWESP terms from the ERGM literature \citep{Robins2007}, and
 degree-preserving donor matching for the simultaneous scheme. Overall, the
-network imputation is simple and efficient and likely a sufficient in many
+network imputation is simple and efficient and likely sufficient in many
 applications. However, a proper network-model-based imputation (e.g., using ERGM
 or SAOM), will be superior, because it is able to incorporate many more network
 statistics directly into the imputation model. Obtaining such an imputation at
 every iteration of the chained-equations loop is possible but enormously time
-consuming and is thus not suggested here.
+consuming and is thus not implemented or suggested here.
 
-\textbf{Per-target imputation methods.} \code{netmice()}'s \code{method}
+\textbf{Method tuning parameters.} \code{netmice()}'s \code{method}
 argument dispatches generically to \pkg{mice}'s numeric-response
-univariate methods (Section~\ref{sec:netmice}), but applies one method
-globally --- to every numeric/binary attribute and, under the simultaneous
-scheme, to every network. \pkg{mice} itself accepts a named vector of
-per-variable methods; extending \code{netmice()} the same way (e.g., trees
-for a skewed attribute, PMM elsewhere), and exposing the methods' tuning
-parameters, is a natural next step, as the internal dispatch is already
-method-agnostic.
+univariate methods, globally or per target
+(Section~\ref{sec:netmice}), but the methods' tuning parameters
+(\code{cart}'s \code{minbucket}, \code{rf}'s \code{ntree}, PMM's matching
+type) currently keep \pkg{mice}'s defaults; exposing them --- per method,
+or per target alongside the method itself --- is a natural next step, as
+the internal dispatch is already method-agnostic.
 
 \section{Summary}
 \label{sec:summary}
 
 \pkg{netimpute} provides a single, coherent \proglang{R} interface for a
-problem that is otherwise split across separate tools: computing
-structural and homophily measures on networks with mixed attribute types
-and mixed (binary or non-negative weighted) tie types, reducing those
-measures to a workable predictor set for imputation --- by principal
-components or by network-aware per-target selection --- fitting a
-predictive dyadic model for network ties, and jointly imputing missing
+problem that is otherwise split across separate tools, jointly imputing missing
 attributes and missing ties through a single chained-equations loop in
 which ties are, by default, redrawn one at a time conditional on the
 current state of everything else.

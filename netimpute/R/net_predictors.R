@@ -68,14 +68,15 @@
 #' @examples
 #' set.seed(1)
 #' nets <- list(
-#'   school_a = igraph::sample_gnp(40, 0.08, directed = TRUE),
-#'   school_b = igraph::sample_gnp(55, 0.06, directed = TRUE)
+#'   school_a = igraph::sample_gnp(30, 0.08, directed = TRUE),
+#'   school_b = igraph::sample_gnp(35, 0.06, directed = TRUE)
 #' )
-#' attrs <- lapply(c(40, 55), function(n) {
+#' attrs <- lapply(c(30, 35), function(n) {
 #'   data.frame(age = round(rnorm(n, 35, 8)),
 #'              gender = sample(c("F", "M"), n, replace = TRUE))
 #' })
-#' res <- net_predictors(nets, attrs, measure_set = "full",
+#' # keep total_degree raw, reduce the remaining measures to components
+#' res <- net_predictors(nets, attrs, measure_set = c("core", "total_degree"),
 #'                        output = "both", keep_vars = c("total_degree"))
 #' head(res$predictors)
 net_predictors <- function(net_list,

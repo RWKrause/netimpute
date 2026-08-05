@@ -43,7 +43,7 @@ test_that("netmice: method = 'cart' runs end to end via the generic mice dispatc
   fx <- make_missing_fixture()
   fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, method = "cart",
                   seed = 5, printFlag = FALSE)
-  expect_equal(fit$method, "cart")
+  expect_true(all(fit$method == "cart"))
   expect_false(anyNA(fit$imp[[1]]$age))
   expect_false(anyNA(fit$imp[[1]]$status))
   expect_false(anyNA(fit$imp[[1]]$dept))
@@ -57,7 +57,7 @@ test_that("netmice: method = 'norm' keeps binary attributes on their two levels 
   fx <- make_missing_fixture()
   fit <- netmice(fx$attrs, fx$nets, m = 2, maxit = 2, method = "norm",
                   seed = 6, printFlag = FALSE)
-  expect_equal(fit$method, "norm")
+  expect_true(all(fit$method == "norm"))
   for (im in 1:2) {
     expect_false(anyNA(fit$imp[[im]]$status))
     # binary attribute: continuous norm draws must map back to valid levels
@@ -177,6 +177,60 @@ test_that("netmice: net_update = 'gibbs' rejects net_random_intercepts", {
     netmice(fx$attrs, fx$nets, m = 1, maxit = 1, net_update = "gibbs",
             net_random_intercepts = "ego", printFlag = FALSE),
     "not compatible"
+  )
+})
+
+test_that("netmice: per-target methods via a named `method` vector", {
+  fx <- make_missing_fixture()
+  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, seed = 8,
+                  printFlag = FALSE,
+                  method = c("pmm", age = "norm"))
+  # the resolved map: named override for age, unnamed default elsewhere
+  expect_equal(unname(fit$method[["age"]]), "norm")
+  expect_true(all(fit$method[setdiff(names(fit$method), "age")] == "pmm"))
+  expect_false(anyNA(fit$imp[[1]]$age))
+  # observed ages are integers (round(rnorm)); norm draws are continuous,
+  # so at least one imputed age falls outside the observed value set -
+  # proof the per-target override (not PMM) handled age
+  expect_true(any(!(fit$imp[[1]]$age[is.na(fx$attrs$age)] %in%
+                      fx$attrs$age[!is.na(fx$attrs$age)])))
+  # PMM targets stay on observed values
+  expect_true(all(fit$imp[[1]]$status %in%
+                    unique(fx$attrs$status[!is.na(fx$attrs$status)])))
+})
+
+test_that("netmice: named `method` entries are validated", {
+  fx <- make_missing_fixture()
+  expect_error(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE,
+            method = c(not_a_variable = "cart")),
+    "unknown variable/network"
+  )
+  expect_error(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE,
+            method = c("pmm", "cart")),
+    "at most one unnamed"
+  )
+  expect_error(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE,
+            method = c(age = "banana")),
+    "Supported methods"
+  )
+})
+
+test_that("netmice: named `method` entries that cannot take effect message", {
+  fx <- make_missing_fixture()
+  # dept is multinomial -> always polyreg
+  expect_message(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE,
+            method = c(dept = "cart")),
+    "polyreg"
+  )
+  # friends is a network and the default updater is tie-wise gibbs
+  expect_message(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE,
+            method = c(friends = "norm")),
+    "tie-wise"
   )
 })
 
@@ -413,6 +467,9 @@ test_that("netmice: printFlag = TRUE (default) produces progress output", {
 })
 
 test_that("netmice: ncores > 1 matches ncores = 1 when the package is installed", {
+  # CRAN limits the number of usable cores and discourages spawning worker
+  # processes during checks; the sequential path is covered everywhere else
+  skip_on_cran()
   skip_if_not("netimpute" %in% rownames(utils::installed.packages()),
               "netimpute is not installed (only load_all()-ed) in this session")
   skip_if_not_installed("future")

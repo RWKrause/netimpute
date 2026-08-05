@@ -18,9 +18,8 @@
 \description{
 A "unit" is one whole predictor (an attribute spanning several dummy
 columns, one network feature, or one dyad-level term). `exempt` units are
-never dropped (a network target's endogenous reciprocity/twopath terms
-and the cross-network `*_tie`/`*_recip` terms, whose named coefficients
-carry substantive dependence structure). Two methods:
+never dropped (a network target's own endogenous reciprocity/twopath
+terms, which the imputation model always carries). Two methods:
 \describe{
   \item{pairwise}{While any unit pair's max absolute between-column
     correlation exceeds `threshold` (default 0.9), drop the member of the

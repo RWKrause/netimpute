@@ -9,7 +9,11 @@
 \description{
 The default tie updater (the simultaneous PMM update is the alternative,
 `net_update = "simultaneous"`). A
-working model is fit once per visit on the observed dyads - logistic
+working model is fit once per visit on the observed dyads (mice's
+estimation rule: the target's own imputed cells never enter the fit,
+while the predictor columns - attribute terms, other-network terms, and
+the endogenous statistics - are evaluated from the full current, partly
+imputed state) - logistic
 regression for a binary network, linear regression otherwise - and one
 coefficient vector is drawn from its asymptotic posterior (mirroring
 mice's Bayesian beta-draw, so between-imputation variability reflects

@@ -72,6 +72,12 @@
 #' @return A named list: density, reciprocity, transitivity, n_isolates,
 #'   avg_inv_geodesic.
 #' @export
+#'
+#' @examples
+#' set.seed(1)
+#' m <- matrix(rbinom(400, 1, 0.15), 20, 20)
+#' diag(m) <- 0
+#' net_diagnostics(m)
 net_diagnostics <- function(mat) {
   b <- (mat != 0) * 1
   diag(b) <- 0
@@ -115,6 +121,43 @@ net_diagnostics <- function(mat) {
          paste(.nm_methods, collapse = ", "), ".", call. = FALSE)
   }
   method
+}
+
+#' Resolve `method` into a per-target method map, mice-style
+#'
+#' Accepts a single unnamed string (one method for everything - the historic
+#' interface), or a named character vector assigning methods to individual
+#' attributes/networks: named entries override, and at most one unnamed
+#' entry sets the default for everything without its own entry ("pmm" when
+#' no unnamed entry is given). E.g. `c("cart", performance = "norm")` uses
+#' `norm` for performance and `cart` elsewhere. Returns a full named vector
+#' with one (validated) entry per attribute and network.
+#' @keywords internal
+.resolve_methods <- function(method, var_names, net_names) {
+  if (!is.character(method) || length(method) < 1 || anyNA(method)) {
+    stop("`method` must be a character vector (a single method, or a named ",
+         "vector of per-target methods).", call. = FALSE)
+  }
+  nms <- names(method)
+  if (is.null(nms)) nms <- rep("", length(method))
+  unnamed <- method[!nzchar(nms)]
+  named <- method[nzchar(nms)]
+  if (length(unnamed) > 1) {
+    stop("`method` may contain at most one unnamed entry (the default ",
+         "method); name every other entry after an attribute or network.",
+         call. = FALSE)
+  }
+  default <- if (length(unnamed)) unname(unnamed) else "pmm"
+  for (m in c(default, unname(named))) .validate_method(m)
+  unknown <- setdiff(names(named), c(var_names, net_names))
+  if (length(unknown)) {
+    stop("`method` names unknown variable/network(s): ",
+         paste(unknown, collapse = ", "), call. = FALSE)
+  }
+  out <- stats::setNames(rep(default, length(var_names) + length(net_names)),
+                         c(var_names, net_names))
+  out[names(named)] <- named
+  out
 }
 
 #' Dispatch one univariate imputation to `mice::mice.impute.<method>()`
@@ -257,7 +300,11 @@ net_diagnostics <- function(mat) {
 #'
 #' The default tie updater (the simultaneous PMM update is the alternative,
 #' `net_update = "simultaneous"`). A
-#' working model is fit once per visit on the observed dyads - logistic
+#' working model is fit once per visit on the observed dyads (mice's
+#' estimation rule: the target's own imputed cells never enter the fit,
+#' while the predictor columns - attribute terms, other-network terms, and
+#' the endogenous statistics - are evaluated from the full current, partly
+#' imputed state) - logistic
 #' regression for a binary network, linear regression otherwise - and one
 #' coefficient vector is drawn from its asymptotic posterior (mirroring
 #' mice's Bayesian beta-draw, so between-imputation variability reflects
@@ -671,7 +718,7 @@ net_diagnostics <- function(mat) {
 
         lvls <- var_levels[[v]]
         if (is.numeric(cur_data[[v]])) {
-          imp_vals <- .impute_univariate(method,
+          imp_vals <- .impute_univariate(method[[v]],
                                          y = cur_data[[v]],
                                          ry = ry,
                                          x = x,
@@ -684,7 +731,7 @@ net_diagnostics <- function(mat) {
                                          donors = donors)
         } else {
           y_codes <- as.integer(factor(cur_data[[v]], levels = lvls))
-          imp_codes <- .impute_univariate(method,
+          imp_codes <- .impute_univariate(method[[v]],
                                           y = y_codes,
                                           ry = ry,
                                           x = x,
@@ -781,7 +828,7 @@ net_diagnostics <- function(mat) {
                                           alter = d$j,
                                           random_intercepts = net_random_intercepts)
           } else {
-            imp_vals <- .impute_univariate(method,
+            imp_vals <- .impute_univariate(method[[tgt]],
                                            y = y,
                                            ry = ry,
                                            x = x,
@@ -867,6 +914,18 @@ net_diagnostics <- function(mat) {
 #' network it depends on is (re-)imputed, and once when the attribute it
 #' depends on is (re-)imputed - and, because the visit order is randomized,
 #' not always in the same order.
+#'
+#' \strong{Estimation rule (identical to mice).} At every visit, the
+#' working model is estimated on the entries where the \emph{target} is
+#' observed - the target's own current imputations never enter its fit, at
+#' any sweep - while every predictor column is evaluated from the full
+#' current state of the data: the current imputations of all \emph{other}
+#' attributes and networks, and, for a network target, the endogenous
+#' statistics (`reciprocity`, `twopath`) computed from its own partly
+#' imputed matrix. Previously imputed information therefore informs every
+#' model at every sweep through the predictors, exactly as in
+#' \pkg{mice}'s fully conditional specification - netimpute simply
+#' generalizes which predictors exist, not how the models are estimated.
 #'
 #' \strong{Automatic dimensionality safeguard.} The auto-generated predictor
 #' set (structural + homophily measures across every network, for attribute
@@ -1026,12 +1085,22 @@ net_diagnostics <- function(mat) {
 #'   (default 20 - higher than `mice`'s own default of 5, since jointly
 #'   cycling through both attributes and networks is a slower-mixing,
 #'   more complex conditional model than attribute-only imputation).
-#' @param method Univariate imputation method, dispatched to the
-#'   corresponding \code{mice::mice.impute.<method>()} function. One of
-#'   `"pmm"` (default), `"midastouch"`, `"sample"`, `"cart"`, `"rf"`
-#'   (requires \pkg{ranger} or \pkg{randomForest}), `"norm"`, `"norm.nob"`,
-#'   `"norm.boot"`, `"norm.predict"`, or `"mean"` - the mice univariate
-#'   methods whose working model handles a numeric response. Method-specific
+#' @param method Univariate imputation method(s), dispatched to the
+#'   corresponding \code{mice::mice.impute.<method>()} function. Each
+#'   method is one of `"pmm"` (default), `"midastouch"`, `"sample"`,
+#'   `"cart"`, `"rf"` (requires \pkg{ranger} or \pkg{randomForest}),
+#'   `"norm"`, `"norm.nob"`, `"norm.boot"`, `"norm.predict"`, or `"mean"` -
+#'   the mice univariate methods whose working model handles a numeric
+#'   response. A single unnamed string applies one method globally. For
+#'   per-target methods, supply a named character vector, mice-style: named
+#'   entries assign a method to individual attributes/networks, and at most
+#'   one unnamed entry sets the default for every target without its own
+#'   entry (`"pmm"` if omitted). E.g.
+#'   `method = c("cart", performance = "norm", friends = "pmm")` imputes
+#'   `performance` with `norm`, the `friends` network with PMM, and
+#'   everything else with trees. Names must be attribute columns or
+#'   networks; entries for targets whose working model is fixed by design
+#'   (see below) are ignored with a message. Method-specific
 #'   tuning parameters (e.g. `cart`'s `minbucket`, `rf`'s `ntree`) use
 #'   mice's defaults. The method applies to numeric attributes, to binary
 #'   attributes (integer-coded; a regression-type method's continuous draws
@@ -1233,7 +1302,8 @@ net_diagnostics <- function(mat) {
 #' @return An object of class `"netmids"` with elements: `data`, `net_list`
 #'   (original, NA-preserving inputs, except that structurally absent cells
 #'   are fixed at 0 and cells deduced from `net_dependence` are filled),
-#'   `m`, `maxit`, `method`, `donors`, `net_init`, `net_update`,
+#'   `m`, `maxit`, `method` (the resolved per-target method map: one named
+#'   entry per attribute/network), `donors`, `net_init`, `net_update`,
 #'   `structural` (the
 #'   per-network list of structural-zero matrices, or `NULL`),
 #'   `net_dependence` (the normalized rule list, or `NULL`),
@@ -1252,19 +1322,27 @@ net_diagnostics <- function(mat) {
 #' @export
 #'
 #' @examples
-#' \dontrun{
 #' set.seed(1)
-#' n <- 40
-#' friends <- matrix(rbinom(n * n, 1, 0.1), n, n); diag(friends) <- 0
-#' friends[sample(length(friends), 50)] <- NA
+#' n <- 30
+#' friends <- matrix(rbinom(n * n, 1, 0.15), n, n)
+#' diag(friends) <- 0
+#' # unknown ties are marked NA (off the diagonal)
+#' off <- which(row(friends) != col(friends))
+#' friends[sample(off, 40)] <- NA
+#'
 #' attrs <- data.frame(age = rnorm(n, 35, 8),
-#'                      performance = rnorm(n),
-#'                      gender = sample(c("F", "M"), n, TRUE),
-#'                      happiness = rnorm(n))
-#' attrs$happiness[sample(n, 5)] <- NA
-#' fit <- netmice(attrs, list(friends = friends), m = 3, maxit = 3,
-#'                models = list("happiness ~ indegree + age + performance * gender"))
-#' out <- complete_netmice(fit, 1)
+#'                     performance = rnorm(n),
+#'                     gender = sample(c("F", "M"), n, TRUE))
+#' attrs$performance[sample(n, 4)] <- NA
+#'
+#' # a few seconds: loading the imputation engine dominates the runtime
+#' \donttest{
+#' fit <- netmice(attrs, list(friends = friends), m = 2, maxit = 3,
+#'                seed = 1, printFlag = FALSE,
+#'                models = list("performance ~ indegree + age * gender"))
+#' fit
+#' completed <- complete_netmice(fit, 1)
+#' anyNA(completed$data)
 #' }
 netmice <- function(data,
                     net_list,
@@ -1291,7 +1369,6 @@ netmice <- function(data,
                     seed = NA,
                     printFlag = TRUE) {
 
-  method <- .validate_method(method)
   net_init <- match.arg(net_init)
   net_update_missing <- missing(net_update)
   net_update <- match.arg(net_update)
@@ -1334,6 +1411,13 @@ netmice <- function(data,
          paste(name_clash, collapse = ", "),
          ". Rename one or the other.", call. = FALSE)
   }
+
+  # per-target method map (mice-style named vector, or one global method).
+  # `method_named` remembers which targets the user explicitly named, for
+  # the ignored-entry messages below.
+  method_named <- if (is.null(names(method))) character(0) else
+    names(method)[nzchar(names(method))]
+  method <- .resolve_methods(method, var_names, net_names)
 
   mats0 <- lapply(net_list, .as_matrix_generic)
   for (k in seq_along(mats0)) diag(mats0[[k]]) <- 0
@@ -1460,6 +1544,31 @@ netmice <- function(data,
 
   var_levels <- lapply(data, function(x) if (
     !is.numeric(x)) sort(unique(x[!is.na(x)])) else NULL)
+
+  # explicitly named `method` entries that cannot take effect: multinomial
+  # attributes always use polyreg, and network targets consult `method`
+  # only under the simultaneous scheme without random intercepts
+  multi_named <- intersect(method_named, vm_names)
+  multi_named <- multi_named[vapply(multi_named, function(v)
+    length(var_levels[[v]]) > 2, logical(1))]
+  if (length(multi_named)) {
+    message("netimpute: `method` entries for ",
+            paste(multi_named, collapse = ", "),
+            " will not be used - attributes with more than two categories ",
+            "are always imputed with polyreg.")
+  }
+  net_named <- intersect(method_named, net_missing_names)
+  if (length(net_named) &&
+      (net_update == "gibbs" || length(net_random_intercepts))) {
+    message("netimpute: `method` entries for network(s) ",
+            paste(net_named, collapse = ", "), " will not be used - ties ",
+            "are drawn ",
+            if (net_update == "gibbs") {
+              "by the tie-wise (gibbs) updater's own working model."
+            } else {
+              "by the mixed-model PMM step (`net_random_intercepts`)."
+            })
+  }
 
   if ("dyad" %in% net_random_intercepts) {
     undirected <- net_missing_names[vapply(
@@ -1597,17 +1706,70 @@ netmice <- function(data,
 #' @return A list with `data` (completed data.frame) and `net_list`
 #'   (completed list of adjacency matrices).
 #' @export
+#'
+#' @examples
+#' set.seed(1)
+#' n <- 25
+#' friends <- matrix(rbinom(n * n, 1, 0.15), n, n)
+#' diag(friends) <- 0
+#' friends[sample(which(row(friends) != col(friends)), 30)] <- NA
+#' attrs <- data.frame(age = rnorm(n, 35, 8),
+#'                     gender = sample(c("F", "M"), n, TRUE))
+#' attrs$age[sample(n, 4)] <- NA
+#'
+#' \donttest{
+#' fit <- netmice(attrs, list(friends = friends), m = 2, maxit = 2,
+#'                seed = 1, printFlag = FALSE)
+#' completed <- complete_netmice(fit, 1)
+#' str(completed$data)
+#' anyNA(completed$net_list$friends)
+#' }
 complete_netmice <- function(x, action = 1) {
   if (!inherits(x, "netmids")) stop("`x` must be a netmids object from netmice().", call. = FALSE)
   if (action < 1 || action > x$m) stop("`action` must be between 1 and ", x$m, ".", call. = FALSE)
   list(data = x$imp[[action]], net_list = x$imp_nets[[action]])
 }
 
+#' Print a summary of a netmids object
+#'
+#' Reports the imputation settings (number of imputations and iterations,
+#' univariate method(s), donors, cores), which attributes and networks had
+#' missing values, and any non-default features in use (tie-wise updating,
+#' random intercepts, structural zeros, custom `models`, per-target
+#' predictor selection).
+#'
+#' @param x A `netmids` object from \code{\link{netmice}}.
+#' @param ... Ignored, for consistency with the generic.
+#' @return `x`, invisibly.
 #' @export
+#'
+#' @examples
+#' set.seed(1)
+#' n <- 25
+#' friends <- matrix(rbinom(n * n, 1, 0.15), n, n)
+#' diag(friends) <- 0
+#' friends[sample(which(row(friends) != col(friends)), 30)] <- NA
+#' attrs <- data.frame(age = rnorm(n, 35, 8),
+#'                     gender = sample(c("F", "M"), n, TRUE))
+#' attrs$age[sample(n, 4)] <- NA
+#'
+#' \donttest{
+#' fit <- netmice(attrs, list(friends = friends), m = 2, maxit = 2,
+#'                seed = 1, printFlag = FALSE)
+#' print(fit)
+#' }
 print.netmids <- function(x, ...) {
   cat("Class: netmids\n")
+  meths <- unique(unname(x$method))
   cat("Imputations (m):", x$m, "  Iterations (maxit):", x$maxit,
-      "  Method:", x$method, "  Donors:", x$donors, "  Cores:", x$ncores, "\n")
+      "  Method:", if (length(meths) == 1) meths else "per-target",
+      "  Donors:", x$donors, "  Cores:", x$ncores, "\n")
+  if (length(meths) > 1) {
+    mm <- x$method[intersect(names(x$method),
+                             c(x$var_missing, x$net_missing))]
+    cat("Per-target methods:",
+        paste(names(mm), mm, sep = " = ", collapse = ", "), "\n")
+  }
   cat("Variables with missingness:", paste(x$var_missing, collapse = ", "), "\n")
   cat("Networks with missingness:", paste(x$net_missing, collapse = ", "), "\n")
   if (identical(x$net_update, "gibbs")) {
