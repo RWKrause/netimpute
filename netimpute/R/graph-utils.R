@@ -9,7 +9,7 @@
 #' non-negative edge costs; the weighted transitivity/reciprocity formulas
 #' below, which assume weights are magnitudes) are not well-defined or not
 #' implemented for them.
-#' @keywords internal
+#' @noRd
 .reject_negative <- function(vals) {
   if (any(vals < 0, na.rm = TRUE)) {
     stop("netimpute currently only supports binary (0/1) or non-negative weighted ",
@@ -21,7 +21,7 @@
   invisible(NULL)
 }
 
-#' @keywords internal
+#' @noRd
 .as_igraph <- function(net) {
   if (inherits(net, "igraph")) {
     if ("weight" %in% igraph::edge_attr_names(net)) .reject_negative(igraph::E(net)$weight)
@@ -56,12 +56,12 @@
        call. = FALSE)
 }
 
-#' @keywords internal
+#' @noRd
 .is_weighted_mat <- function(m) {
   any(m[m != 0] != 1)
 }
 
-#' @keywords internal
+#' @noRd
 .align_attributes <- function(g, attributes, id_col = NULL) {
   n <- igraph::vcount(g)
   attributes <- as.data.frame(attributes)
@@ -98,7 +98,7 @@
 }
 
 #' Infer whether an attribute is continuous, binary, or multinomial
-#' @keywords internal
+#' @noRd
 .infer_attr_type <- function(x) {
   u <- unique(x[!is.na(x)])
   if (length(u) <= 2) return("binary")
@@ -106,7 +106,7 @@
   return("multinomial")
 }
 
-#' @keywords internal
+#' @noRd
 .resolve_attr_types <- function(attributes, attr_types) {
   nms <- names(attributes)
   resolved <- stats::setNames(vector("character", length(nms)), nms)
@@ -120,12 +120,12 @@
   bad <- setdiff(unique(resolved), c("continuous", "binary", "multinomial"))
   if (length(bad)) {
     stop("attr_types must be one of 'continuous', 'binary', 'multinomial'. Got: ",
-         paste(bad, collapse = ", "), call. = FALSE)
+         toString(bad), call. = FALSE)
   }
   inferred <- setdiff(nms, names(attr_types))
   if (length(inferred)) {
     message("netimpute: inferred attribute types -> ",
-            paste(sprintf("%s = %s", inferred, resolved[inferred]), collapse = ", "))
+            toString(sprintf("%s = %s", inferred, resolved[inferred])))
   }
   resolved
 }
@@ -140,7 +140,7 @@
 #' weighted ties). \code{reciprocal_degree}/\code{nonreciprocal_degree} are
 #' binary-only concepts (discrete dyad counts) and are `NA` for weighted
 #' networks.
-#' @keywords internal
+#' @noRd
 .dyad_reciprocity <- function(g) {
   n <- igraph::vcount(g)
   if (!igraph::is_directed(g)) {
@@ -192,7 +192,7 @@
 #' ordinary (binary) local clustering coefficient when all weights are 1.
 #' Direction is collapsed first (mean of the two directed weights) since
 #' clustering is an undirected-triad concept here.
-#' @keywords internal
+#' @noRd
 .weighted_local_clustering <- function(g) {
   n <- igraph::vcount(g)
   gu <- if (igraph::is_directed(g)) {
@@ -223,7 +223,7 @@
 }
 
 #' Bonacich power centrality with an automatically convergent exponent
-#' @keywords internal
+#' @noRd
 .bonacich_power <- function(g, exponent = NULL) {
   n <- igraph::vcount(g)
   adj <- as.matrix(igraph::as_adjacency_matrix(g, sparse = FALSE))
@@ -243,7 +243,7 @@
 }
 
 #' Burt's structural holes: effective size, redundancy, efficiency
-#' @keywords internal
+#' @noRd
 .structural_holes <- function(g) {
   gu <- igraph::as_undirected(g, mode = "collapse")
   n <- igraph::vcount(g)
@@ -265,7 +265,7 @@
 }
 
 #' Average nearest-neighbour (alter) degree
-#' @keywords internal
+#' @noRd
 .neighbor_degree <- function(g) {
   deg <- igraph::degree(g, mode = "all")
   n <- igraph::vcount(g)

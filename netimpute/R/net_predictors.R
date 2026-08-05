@@ -137,7 +137,7 @@ net_predictors <- function(net_list,
     missing_keep <- setdiff(keep_vars, names(measures_df))
     if (length(missing_keep)) {
       stop("keep_vars not found among computed measures: ",
-           paste(missing_keep, collapse = ", "), call. = FALSE)
+           toString(missing_keep), call. = FALSE)
     }
   }
 
@@ -180,7 +180,7 @@ net_predictors <- function(net_list,
   if (length(bad)) {
     message(
       "netimpute: dropping zero-variance / all-NA measure(s) before PCA: ",
-            paste(bad, collapse = ", "))
+            toString(bad))
     pca_input <- pca_input[, setdiff(colnames(pca_input), bad), drop = FALSE]
   }
 
@@ -205,7 +205,7 @@ net_predictors <- function(net_list,
 #' Coerce a stacked measures data.frame into a numeric matrix suitable for PCA:
 #' logicals become 0/1, character/factor columns become dummy indicators
 #' (first level dropped).
-#' @keywords internal
+#' @noRd
 .prep_pca_matrix <- function(df, exclude = character(0)) {
   df <- df[setdiff(names(df), exclude)]
   df[] <- lapply(df, function(col) if (is.logical(col)) as.numeric(col) else col)

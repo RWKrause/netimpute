@@ -1,7 +1,7 @@
 Package: netimpute
 Type: Package
 Title: Joint Multiple Imputation of Network Ties and Node Attributes
-Version: 0.1.0
+Version: 1.0.0
 Authors@R: c(
     person(
       "Robert W.", "Krause",
@@ -33,6 +33,7 @@ License: GPL (>= 3)
 URL: https://github.com/RWKrause/netimpute
 BugReports: https://github.com/RWKrause/netimpute/issues
 Encoding: UTF-8
+Language: en-US
 Depends: R (>= 3.6.0)
 Imports:
     igraph,
@@ -46,7 +47,6 @@ Suggests:
     future,
     nnet,
     lme4,
-    utils,
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
 Config/roxygen2/version: 8.0.0

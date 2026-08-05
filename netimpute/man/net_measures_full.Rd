@@ -13,10 +13,13 @@ net_measures_full(
 )
 }
 \arguments{
-\item{net}{An igraph object, a `network`-class object, or an adjacency matrix.}
+\item{net}{An igraph object, a `network`-class object, or an adjacency
+matrix.}
 
-\item{attributes}{A data.frame/tibble of node attributes. Either aligned by
-row position to the vertices of `net`, or matched via `id_col`.}
+\item{attributes}{A data.frame/tibble of node attributes, required here
+because the `"core"` set always includes the homophily block. Either
+aligned by row position to the vertices of `net`, or matched via
+`id_col`.}
 
 \item{attr_types}{Optional named character vector overriding auto-detected
 attribute types, e.g. \code{c(age = "continuous", dept = "multinomial")}.
@@ -70,10 +73,10 @@ formulas - see \code{\link{net_measures_core}} for details.
 }
 \examples{
 set.seed(1)
-g <- igraph::sample_gnp(40, p = 0.08, directed = TRUE)
+g <- igraph::sample_gnp(25, p = 0.1, directed = TRUE)
 attrs <- data.frame(
-  age = round(rnorm(40, 35, 8)),
-  gender = sample(c("F", "M"), 40, replace = TRUE)
+  age = round(rnorm(25, 35, 8)),
+  gender = sample(c("F", "M"), 25, replace = TRUE)
 )
 head(net_measures_full(g, attrs))
 }

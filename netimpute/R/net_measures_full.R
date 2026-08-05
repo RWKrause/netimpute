@@ -44,10 +44,10 @@
 #'
 #' @examples
 #' set.seed(1)
-#' g <- igraph::sample_gnp(40, p = 0.08, directed = TRUE)
+#' g <- igraph::sample_gnp(25, p = 0.1, directed = TRUE)
 #' attrs <- data.frame(
-#'   age = round(rnorm(40, 35, 8)),
-#'   gender = sample(c("F", "M"), 40, replace = TRUE)
+#'   age = round(rnorm(25, 35, 8)),
+#'   gender = sample(c("F", "M"), 25, replace = TRUE)
 #' )
 #' head(net_measures_full(g, attrs))
 net_measures_full <- function(net, attributes, attr_types = NULL, id_col = NULL, use_sna = TRUE) {

@@ -9,7 +9,7 @@
 # (possibly asymmetric) adjacency matrices with NA marking unknown cells.
 # igraph/network objects are still accepted but are treated as fully observed.
 
-#' @keywords internal
+#' @noRd
 .as_matrix_generic <- function(net) {
   if (is.matrix(net)) {
     .reject_negative(net)
@@ -28,7 +28,7 @@
 #' network), or a named list of n x n logical matrices whose names match
 #' networks in `net_names`. Returns `NULL` or a full-length named list
 #' (one entry per network, `NULL` where no structural cells were given).
-#' @keywords internal
+#' @noRd
 .validate_structural <- function(structural, net_names, n) {
   if (is.null(structural)) return(NULL)
   check_one <- function(mat, label) {
@@ -52,14 +52,14 @@
     return(stats::setNames(rep(list(m), length(net_names)), net_names))
   }
   if (is.list(structural)) {
-    if (is.null(names(structural)) || any(!nzchar(names(structural)))) {
+    if (is.null(names(structural)) || !all(nzchar(names(structural)))) {
       stop("When `structural` is a list, every element must be named after ",
            "a network in `net_list`.", call. = FALSE)
     }
     unknown <- setdiff(names(structural), net_names)
     if (length(unknown)) {
       stop("`structural` names unknown network(s): ",
-           paste(unknown, collapse = ", "), call. = FALSE)
+           toString(unknown), call. = FALSE)
     }
     out <- stats::setNames(vector("list", length(net_names)), net_names)
     for (nm in names(structural)) {
@@ -77,7 +77,7 @@
 #' value there contradicts the specification and errors; `NA` cells (coded
 #' missing, but actually impossible) are silently set to 0 so they are never
 #' treated as missing ties to impute.
-#' @keywords internal
+#' @noRd
 .apply_structural_zeros <- function(mats, struct_list) {
   if (is.null(struct_list)) return(mats)
   for (nm in names(mats)) {
@@ -110,7 +110,7 @@
 #' @param structural optional n x n logical matrix marking the *target*
 #'   network's structurally absent (zero-by-design) cells; those dyads are
 #'   dropped from the design data entirely, like the diagonal
-#' @keywords internal
+#' @noRd
 .build_dyad_data <- function(mats,
                              attributes,
                              target_idx,
@@ -467,7 +467,7 @@ dyad_regression <- function(net_list,
 
 #' Append `.ego`, `.alter`, `.dyad` grouping factors (from the `i`/`j`
 #' indices) to a dyad-level data.frame, for lme4 random intercepts.
-#' @keywords internal
+#' @noRd
 .add_dyad_groups <- function(d) {
   d$.ego   <- factor(d$i)
   d$.alter <- factor(d$j)

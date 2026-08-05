@@ -7,10 +7,13 @@
 net_measures_core(net, attributes, attr_types = NULL, id_col = NULL)
 }
 \arguments{
-\item{net}{An igraph object, a `network`-class object, or an adjacency matrix.}
+\item{net}{An igraph object, a `network`-class object, or an adjacency
+matrix.}
 
-\item{attributes}{A data.frame/tibble of node attributes. Either aligned by
-row position to the vertices of `net`, or matched via `id_col`.}
+\item{attributes}{A data.frame/tibble of node attributes, required here
+because the `"core"` set always includes the homophily block. Either
+aligned by row position to the vertices of `net`, or matched via
+`id_col`.}
 
 \item{attr_types}{Optional named character vector overriding auto-detected
 attribute types, e.g. \code{c(age = "continuous", dept = "multinomial")}.

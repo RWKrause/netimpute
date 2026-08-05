@@ -11,7 +11,7 @@
 #'
 #' `delayedAssign()` promises: each intermediate is computed on first access
 #' by a measure function and cached in the environment afterwards.
-#' @keywords internal
+#' @noRd
 .nm_context <- function(g) {
   ctx <- new.env(parent = emptyenv())
   ctx$g <- g
@@ -30,7 +30,7 @@
   ctx
 }
 
-#' @keywords internal
+#' @noRd
 .nm_try_sna <- function(label, expr, n) {
   tryCatch(as.numeric(expr), error = function(e) {
     warning("netimpute: sna::", label, " failed (", conditionMessage(e),
@@ -48,7 +48,7 @@
 #' `ctx$n`. To add a measure: add an entry here, and list it in the
 #' \code{\link{net_measures}} documentation (plus \code{.nm_core_set} if it
 #' should be part of "core").
-#' @keywords internal
+#' @noRd
 .nm_registry <- list(
   total_degree         = function(ctx) igraph::degree(ctx$g, mode = "all"),
   indegree             = function(ctx) igraph::degree(ctx$g, mode = "in"),
@@ -104,18 +104,18 @@
 )
 
 #' Measures that require the sna package
-#' @keywords internal
+#' @noRd
 .nm_sna_measures <- c("gilschmidt", "flow_betweenness", "load_centrality",
                       "stress_centrality", "information_centrality", "prestige")
 
 #' What "core" and "full" expand to ("homophily" is the per-attribute
 #' homophily/alter block; it is a member of both named sets)
-#' @keywords internal
+#' @noRd
 .nm_core_set <- c("outdegree", "indegree", "reciprocity_ratio", "bonacich_power",
                   "betweenness", "isolate", "constraint", "harmonic_closeness",
                   "local_clustering", "homophily")
 
-#' @keywords internal
+#' @noRd
 .nm_full_set <- c(names(.nm_registry), "homophily")
 
 #' Expand and validate a `measure_set` specification
@@ -125,7 +125,7 @@
 #' first-appearance order (so `"core"` alone reproduces the historical core
 #' column order). Idempotent: the returned vector is itself a valid
 #' `measure_set`.
-#' @keywords internal
+#' @noRd
 .resolve_measure_set <- function(measure_set) {
   if (!is.character(measure_set) || length(measure_set) == 0 || anyNA(measure_set)) {
     stop("`measure_set` must be a non-empty character vector.", call. = FALSE)
@@ -133,9 +133,9 @@
   valid <- c("core", "full", "homophily", names(.nm_registry))
   bad <- setdiff(measure_set, valid)
   if (length(bad)) {
-    stop("Unknown entries in `measure_set`: ", paste(bad, collapse = ", "),
+    stop("Unknown entries in `measure_set`: ", toString(bad),
          ". Valid entries are 'core', 'full', 'homophily', and the individual ",
-         "measures: ", paste(names(.nm_registry), collapse = ", "), ".",
+         "measures: ", toString(names(.nm_registry)), ".",
          call. = FALSE)
   }
   expanded <- unlist(lapply(measure_set, function(s) {
@@ -258,7 +258,7 @@ net_measures <- function(net, attributes = NULL, measure_set = "core",
   sna_ok <- use_sna && requireNamespace("sna", quietly = TRUE)
   if (length(sna_requested) && use_sna && !sna_ok) {
     message("netimpute: package 'sna' not installed - ",
-            paste(sna_requested, collapse = ", "),
+            toString(sna_requested),
             " will be NA. Install with install.packages('sna') to compute them.")
   }
 

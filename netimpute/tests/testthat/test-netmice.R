@@ -192,8 +192,8 @@ test_that("netmice: per-target methods via a named `method` vector", {
   # observed ages are integers (round(rnorm)); norm draws are continuous,
   # so at least one imputed age falls outside the observed value set -
   # proof the per-target override (not PMM) handled age
-  expect_true(any(!(fit$imp[[1]]$age[is.na(fx$attrs$age)] %in%
-                      fx$attrs$age[!is.na(fx$attrs$age)])))
+  expect_false(all(fit$imp[[1]]$age[is.na(fx$attrs$age)] %in%
+                     fx$attrs$age[!is.na(fx$attrs$age)]))
   # PMM targets stay on observed values
   expect_true(all(fit$imp[[1]]$status %in%
                     unique(fx$attrs$status[!is.na(fx$attrs$status)])))
@@ -470,8 +470,11 @@ test_that("netmice: ncores > 1 matches ncores = 1 when the package is installed"
   # CRAN limits the number of usable cores and discourages spawning worker
   # processes during checks; the sequential path is covered everywhere else
   skip_on_cran()
-  skip_if_not("netimpute" %in% rownames(utils::installed.packages()),
-              "netimpute is not installed (only load_all()-ed) in this session")
+  # find.package() rather than installed.packages(): the latter is slow and
+  # CRAN rejects it. Both answer the same question here - is there an
+  # installed copy for the multisession workers to load?
+  skip_if(length(find.package("netimpute", quiet = TRUE)) == 0,
+          "netimpute is not installed (only load_all()-ed) in this session")
   skip_if_not_installed("future")
   fx <- make_missing_fixture()
   fit_seq <- netmice(fx$attrs, fx$nets, m = 2, maxit = 2, seed = 7, ncores = 1, printFlag = FALSE)

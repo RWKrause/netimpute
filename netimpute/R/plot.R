@@ -66,11 +66,11 @@ plot.netmids <- function(x, vars = NULL, nets = NULL, ask = interactive(), max_r
   nets <- if (is.null(nets)) all_nets else nets
   bad_nets <- setdiff(nets, all_nets)
   if (length(bad_nets)) {
-    stop("Unknown network name(s) in `nets`: ", paste(bad_nets, collapse = ", "), call. = FALSE)
+    stop("Unknown network name(s) in `nets`: ", toString(bad_nets), call. = FALSE)
   }
   bad_vars <- setdiff(vars, x$var_missing)
   if (length(bad_vars)) {
-    stop("Unknown/fully-observed attribute name(s) in `vars`: ", paste(bad_vars, collapse = ", "),
+    stop("Unknown/fully-observed attribute name(s) in `vars`: ", toString(bad_vars),
          call. = FALSE)
   }
   if (length(vars) == 0 && length(nets) == 0) {

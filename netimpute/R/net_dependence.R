@@ -29,7 +29,7 @@
 #' `forbidden`, each a (possibly empty) list of length-2 character vectors.
 #' For `necessary`, the order is `c(parent, child)`: a tie in `parent` is
 #' required for a tie in `child`. `forbidden` pairs are unordered.
-#' @keywords internal
+#' @noRd
 .validate_net_dependence <- function(net_dependence, net_names) {
   if (is.null(net_dependence)) return(NULL)
   if (!is.list(net_dependence) || is.null(names(net_dependence)) ||
@@ -53,7 +53,7 @@
       unknown <- setdiff(p, net_names)
       if (length(unknown)) {
         stop("`net_dependence` (", label, ") references unknown network(s): ",
-             paste(unknown, collapse = ", "), call. = FALSE)
+             toString(unknown), call. = FALSE)
       }
       if (p[1] == p[2]) {
         stop("`net_dependence` (", label, ") relates network '", p[1],
@@ -76,7 +76,7 @@
 #' parent missing) is only possible for binary parents - the tie's existence
 #' is implied but a weight is not - so for weighted parents that deduction
 #' is skipped with a warning.
-#' @keywords internal
+#' @noRd
 .deduce_from_dependence <- function(mats, rules) {
   if (is.null(rules)) return(mats)
   off <- row(mats[[1]]) != col(mats[[1]])
@@ -141,7 +141,7 @@
 #'
 #' Evaluated against the *current* (complete, possibly imputed) state of
 #' the other networks. Returns `NULL` when no cell is determined.
-#' @keywords internal
+#' @noRd
 .dependence_zero_mask <- function(cur_mats, rules, target) {
   if (is.null(rules)) return(NULL)
   mask <- matrix(FALSE, nrow(cur_mats[[target]]), ncol(cur_mats[[target]]))
@@ -162,7 +162,7 @@
 #' consistent); only imputed/filled cells are re-zeroed. Returns the updated
 #' matrices and the names of the networks that changed (so callers can
 #' refresh derived igraph views).
-#' @keywords internal
+#' @noRd
 .enforce_dependence <- function(cur_mats, rules, ry_nets) {
   changed_nets <- character(0)
   if (is.null(rules)) return(list(mats = cur_mats, changed = changed_nets))

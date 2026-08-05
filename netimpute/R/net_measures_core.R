@@ -38,14 +38,11 @@
 #'         \code{<attr>_alter_max}
 #' }
 #'
-#' @param net An igraph object, a `network`-class object, or an adjacency matrix.
-#' @param attributes A data.frame/tibble of node attributes. Either aligned by
-#'   row position to the vertices of `net`, or matched via `id_col`.
-#' @param attr_types Optional named character vector overriding auto-detected
-#'   attribute types, e.g. \code{c(age = "continuous", dept = "multinomial")}.
-#'   Allowed values: "continuous", "binary", "multinomial".
-#' @param id_col Optional name of a column in `attributes` holding node
-#'   identifiers matching `igraph::V(net)$name`, used to align rows.
+#' @inheritParams net_measures
+#' @param attributes A data.frame/tibble of node attributes, required here
+#'   because the `"core"` set always includes the homophily block. Either
+#'   aligned by row position to the vertices of `net`, or matched via
+#'   `id_col`.
 #'
 #' @return A data.frame with one row per node: a `node_id` column followed by
 #'   the structural measures and the per-attribute homophily columns.

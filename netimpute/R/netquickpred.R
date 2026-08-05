@@ -19,7 +19,7 @@
 #' `clash_names` (the raw attribute columns) - matching the convention used
 #' inside the netmice() attribute visits, so names selected here and names
 #' built there always agree.
-#' @keywords internal
+#' @noRd
 .qp_prefix <- function(raw, net_name, multi, clash_names) {
   if (multi) return(paste0(net_name, "_", raw))
   ifelse(raw %in% clash_names, paste0(net_name, "_", raw), raw)
@@ -27,7 +27,7 @@
 
 #' The homophily-block column names net_measures() produces for one attribute
 #' (unprefixed), by attribute type - must mirror .homophily_block()
-#' @keywords internal
+#' @noRd
 .qp_homophily_names <- function(nm, type) {
   if (type == "continuous") {
     paste0(nm, "_", c("diff_out", "diff_in", "alter_mean", "alter_mean_in",
@@ -47,7 +47,7 @@
 #' `clash_names` fixes the prefix-on-collision rule to a stable attribute
 #' set, so feature names do not change when netmice() drops unselected
 #' attribute columns.
-#' @keywords internal
+#' @noRd
 .net_feature_frame <- function(gs, data, measure_set, attr_types, net_names,
                                exclude = character(0),
                                clash_names = names(data)) {
@@ -71,7 +71,7 @@
 #' names the original column that produced matrix column j, so correlations
 #' can be aggregated back to whole variables (a variable's relevance is the
 #' max over its columns).
-#' @keywords internal
+#' @noRd
 .qp_expand_columns <- function(df, types = NULL) {
   cols <- list()
   parent <- character(0)
@@ -104,7 +104,7 @@
 
 #' Dyad-level term names and their parent variables for one network target -
 #' must mirror .build_dyad_data()'s naming
-#' @keywords internal
+#' @noRd
 .qp_dyad_parents <- function(term_names, data, types, net_names, target) {
   par <- stats::setNames(rep(NA_character_, length(term_names)), term_names)
   kind <- stats::setNames(rep("endo", length(term_names)), term_names)
@@ -147,7 +147,7 @@
 #'     drop the worst unit. Catches multi-variable collinearity that
 #'     pairwise correlations miss.}
 #' }
-#' @keywords internal
+#' @noRd
 .qp_prune_units <- function(units, unit_cols, X, Cmat, relevance, exempt,
                             method, threshold) {
   if (method == "none" || length(units) < 2) return(units)
@@ -396,7 +396,7 @@ netquickpred <- function(data,
 
   vm <- var_names[vapply(data, anyNA, logical(1))]
   nm_miss <- net_names[vapply(mats, function(m) {
-    any(is.na(m[row(m) != col(m)]))
+    anyNA(m[row(m) != col(m)])
   }, logical(1))]
 
   if (is.null(targets)) {
@@ -405,11 +405,11 @@ netquickpred <- function(data,
     unknown <- setdiff(targets, c(var_names, net_names))
     if (length(unknown)) {
       stop("`targets` references unknown variable/network(s): ",
-           paste(unknown, collapse = ", "), call. = FALSE)
+           toString(unknown), call. = FALSE)
     }
     no_miss <- setdiff(targets, c(vm, nm_miss))
     if (length(no_miss)) {
-      message("netimpute: target(s) ", paste(no_miss, collapse = ", "),
+      message("netimpute: target(s) ", toString(no_miss),
               " have no missing values and are skipped.")
     }
     tar <- intersect(targets, c(vm, nm_miss))
@@ -740,10 +740,10 @@ print.netquickpred <- function(x, ...) {
       " collinearity:", x$collin_method,
       if (is.finite(x$collin_threshold)) paste0("(threshold ", x$collin_threshold, ")"),
       " missingness screen:", x$use_missingness, "\n")
-  cat("Targets:", paste(x$targets, collapse = ", "), "\n")
+  cat("Targets:", toString(x$targets), "\n")
   if (length(x$drop$attributes) || length(x$drop$networks)) {
     cat("Dropped (missing data, not needed):",
-        paste(c(x$drop$attributes, x$drop$networks), collapse = ", "), "\n")
+        toString(c(x$drop$attributes, x$drop$networks)), "\n")
   }
   for (nm in names(x$predictors)) {
     e <- x$predictors[[nm]]
@@ -760,7 +760,7 @@ print.netquickpred <- function(x, ...) {
       cat("- ", nm, " (network): ", length(e$dyad_terms), " dyad term(s)\n",
           sep = "")
       if (length(e$dyad_terms)) {
-        cat("    ", paste(e$dyad_terms, collapse = ", "), "\n", sep = "")
+        cat("    ", toString(e$dyad_terms), "\n", sep = "")
       }
     }
   }

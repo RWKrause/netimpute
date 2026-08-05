@@ -13,7 +13,7 @@
 # .nm_methods - adding another numeric-response mice method is a one-line
 # change there.
 
-#' @keywords internal
+#' @noRd
 .init_fill_vector <- function(x) {
   miss <- is.na(x)
   if (!any(miss)) return(x)
@@ -23,7 +23,7 @@
   x
 }
 
-#' @keywords internal
+#' @noRd
 .init_fill_matrix <- function(mat, structural = NULL, init = c("zero", "sample")) {
   init <- match.arg(init)
   diag(mat) <- 0
@@ -50,7 +50,7 @@
   mat
 }
 
-#' @keywords internal
+#' @noRd
 .mat_to_igraph <- function(mat) {
   directed <- !isSymmetric(unname(mat))
   igraph::graph_from_adjacency_matrix(
@@ -106,11 +106,11 @@ net_diagnostics <- function(mat) {
 #' and is not part of this user-selectable set). To support another mice
 #' method, add its name here (and, if it has donor-type tuning arguments
 #' beyond `donors`, extend the dispatch in `.impute_univariate()`).
-#' @keywords internal
+#' @noRd
 .nm_methods <- c("pmm", "midastouch", "sample", "cart", "rf",
                  "norm", "norm.nob", "norm.boot", "norm.predict", "mean")
 
-#' @keywords internal
+#' @noRd
 .validate_method <- function(method) {
   if (!is.character(method) || length(method) != 1 || is.na(method)) {
     stop("`method` must be a single character string.", call. = FALSE)
@@ -118,7 +118,7 @@ net_diagnostics <- function(mat) {
   if (!method %in% .nm_methods) {
     stop("Unsupported imputation method: '", method, "'. Supported methods ",
          "(all dispatched to mice::mice.impute.<method>): ",
-         paste(.nm_methods, collapse = ", "), ".", call. = FALSE)
+         toString(.nm_methods), ".", call. = FALSE)
   }
   method
 }
@@ -132,7 +132,7 @@ net_diagnostics <- function(mat) {
 #' no unnamed entry is given). E.g. `c("cart", performance = "norm")` uses
 #' `norm` for performance and `cart` elsewhere. Returns a full named vector
 #' with one (validated) entry per attribute and network.
-#' @keywords internal
+#' @noRd
 .resolve_methods <- function(method, var_names, net_names) {
   if (!is.character(method) || length(method) < 1 || anyNA(method)) {
     stop("`method` must be a character vector (a single method, or a named ",
@@ -152,7 +152,7 @@ net_diagnostics <- function(mat) {
   unknown <- setdiff(names(named), c(var_names, net_names))
   if (length(unknown)) {
     stop("`method` names unknown variable/network(s): ",
-         paste(unknown, collapse = ", "), call. = FALSE)
+         toString(unknown), call. = FALSE)
   }
   out <- stats::setNames(rep(default, length(var_names) + length(net_names)),
                          c(var_names, net_names))
@@ -170,7 +170,7 @@ net_diagnostics <- function(mat) {
 #' \pkg{ranger} or \pkg{randomForest} package (checked by mice itself).
 #' `"polyreg"` is reserved for the internal multinomial-attribute path and
 #' is not part of the user-selectable set.
-#' @keywords internal
+#' @noRd
 .impute_univariate <- function(method, y, ry, x, donors) {
   if (!requireNamespace("mice", quietly = TRUE)) {
     stop("Package 'mice' is required for netmice() imputation. Install with install.packages('mice').",
@@ -211,7 +211,7 @@ net_diagnostics <- function(mat) {
 #' Bayesian draw of the coefficients); between-imputation variability comes
 #' from the donor draw and the chain stochasticity. If the mixed model fails
 #' to fit, falls back to `mice::mice.impute.pmm()` with a warning.
-#' @keywords internal
+#' @noRd
 .impute_pmm_ranef <- function(y, ry, x, donors, ego, alter, random_intercepts) {
   if (!requireNamespace("lme4", quietly = TRUE)) {
     stop("Package 'lme4' is required for `net_random_intercepts`. ",
@@ -269,7 +269,7 @@ net_diagnostics <- function(mat) {
 #' Returns a list, one entry per decomposable endogenous interaction
 #' column: `col` (its index in the predictor matrix), `static` (per-row
 #' static product), `recip`/`twop` (logical flags).
-#' @keywords internal
+#' @noRd
 .gibbs_endo_interactions <- function(xnames, d) {
   out <- list()
   if (is.null(xnames)) return(out)
@@ -341,7 +341,7 @@ net_diagnostics <- function(mat) {
 #' `check = TRUE` recomputes the binarized adjacency and the two-path count
 #' matrix from scratch at the end and errors if the incremental bookkeeping
 #' diverged - used by the unit tests, skipped in production calls.
-#' @keywords internal
+#' @noRd
 .impute_ties_gibbs <- function(d, ry, x, mat, binary, donors, check = FALSE) {
   endo_int <- .gibbs_endo_interactions(colnames(x), d)
   x <- as.matrix(x)
@@ -465,7 +465,7 @@ net_diagnostics <- function(mat) {
 #' endogenous terms (`reciprocity`, `twopath`) and the cross-network
 #' dyad terms (`*_tie`, `*_recip`), whose named coefficients carry
 #' substantive dependence structure that a composite component would dilute.
-#' @keywords internal
+#' @noRd
 .clean_predictor_matrix <- function(x, max_cols = NULL, ry = NULL,
                                     keep_raw = NULL) {
   x <- as.matrix(x)
@@ -506,7 +506,7 @@ net_diagnostics <- function(mat) {
   x
 }
 
-#' @keywords internal
+#' @noRd
 .safe_max_cols <- function(n_obs) {
   max(5, floor(n_obs / 3))
 }
@@ -515,7 +515,7 @@ net_diagnostics <- function(mat) {
 #' and position in the chain. printFlag only prints the per-iteration visit
 #' order, which does not identify *which* target a mid-sweep failure came
 #' from - this does.
-#' @keywords internal
+#' @noRd
 .visit_context <- function(label, expr) {
   tryCatch(expr, error = function(e) {
     stop("netimpute: imputation failed at ", label, ": ",
@@ -535,7 +535,7 @@ net_diagnostics <- function(mat) {
 #' network `friends` AND the attribute `age`). Matching is deliberately
 #' permissive - protecting too much only keeps a variable imputed, whereas
 #' protecting too little would error mid-chain on an unevaluable formula.
-#' @keywords internal
+#' @noRd
 .model_referenced_bases <- function(model_map, var_names, net_names) {
   universe <- c(var_names, net_names)
   vars <- unique(unlist(lapply(model_map, all.vars)))
@@ -552,7 +552,7 @@ net_diagnostics <- function(mat) {
 }
 
 #' Parse a `models` list into a named-by-LHS lookup of formulas
-#' @keywords internal
+#' @noRd
 .parse_models <- function(models) {
   if (is.null(models) || length(models) == 0) return(list())
   out <- list()
@@ -566,7 +566,7 @@ net_diagnostics <- function(mat) {
 
 #' Build extra (formula-specified) predictor columns, NA-safe and
 #' intercept-free, for cbind-ing onto the auto-generated predictor matrix.
-#' @keywords internal
+#' @noRd
 .model_extra_terms <- function(formula, data, ry = NULL) {
   rhs <- stats::delete.response(stats::terms(formula))
   mf <- tryCatch(
@@ -587,7 +587,7 @@ net_diagnostics <- function(mat) {
 }
 
 #' Run one full imputation chain (one of the `m` imputations)
-#' @keywords internal
+#' @noRd
 .run_one_chain <- function(im,
                            data,
                            mats0,
@@ -1408,7 +1408,7 @@ netmice <- function(data,
   name_clash <- intersect(var_names, net_names)
   if (length(name_clash)) {
     stop("Attribute column name(s) and network name(s) must be distinct - both are used as: ",
-         paste(name_clash, collapse = ", "),
+         toString(name_clash),
          ". Rename one or the other.", call. = FALSE)
   }
 
@@ -1444,12 +1444,12 @@ netmice <- function(data,
   bad_models <- setdiff(names(model_map), c(var_names, net_names))
   if (length(bad_models)) {
     stop("`models` references unknown variable/network(s): ",
-         paste(bad_models, collapse = ", "), call. = FALSE)
+         toString(bad_models), call. = FALSE)
   }
 
-  var_missing <- vapply(data, function(x) any(is.na(x)), logical(1))
-  net_missing <- vapply(mats0, function(mat) any(
-    is.na(mat[row(mat) != col(mat)])), logical(1))
+  var_missing <- vapply(data, anyNA, logical(1))
+  net_missing <- vapply(mats0, function(mat) anyNA(
+    mat[row(mat) != col(mat)]), logical(1))
   vm_names <- var_names[var_missing]
   net_missing_names <- net_names[net_missing]
 
@@ -1462,7 +1462,7 @@ netmice <- function(data,
     unknown_t <- setdiff(targets, c(var_names, net_names))
     if (length(unknown_t)) {
       stop("`targets` references unknown variable/network(s): ",
-           paste(unknown_t, collapse = ", "), call. = FALSE)
+           toString(unknown_t), call. = FALSE)
     }
   }
   qp <- NULL
@@ -1470,7 +1470,7 @@ netmice <- function(data,
     qp <- predictor_selection
     if (!is.null(targets) && !setequal(targets, qp$targets)) {
       message("netimpute: a precomputed netquickpred object was supplied; ",
-              "its own targets (", paste(qp$targets, collapse = ", "),
+              "its own targets (", toString(qp$targets),
               ") take precedence over the `targets` argument.")
     }
   } else {
@@ -1517,7 +1517,7 @@ netmice <- function(data,
   if (length(drop_attrs) || length(drop_nets)) {
     message("netimpute: dropping from the imputation (missing data, but ",
             "neither target nor selected predictor): ",
-            paste(c(drop_attrs, drop_nets), collapse = ", "))
+            toString(c(drop_attrs, drop_nets)))
     if (length(drop_attrs)) {
       data <- data[setdiff(var_names, drop_attrs)]
       var_names <- names(data)
@@ -1528,9 +1528,9 @@ netmice <- function(data,
       net_names <- names(mats0)
       if (!is.null(struct_list)) struct_list <- struct_list[net_names]
     }
-    var_missing <- vapply(data, function(x) any(is.na(x)), logical(1))
-    net_missing <- vapply(mats0, function(mat) any(
-      is.na(mat[row(mat) != col(mat)])), logical(1))
+    var_missing <- vapply(data, anyNA, logical(1))
+    net_missing <- vapply(mats0, function(mat) anyNA(
+      mat[row(mat) != col(mat)]), logical(1))
     vm_names <- var_names[var_missing]
     net_missing_names <- net_names[net_missing]
   }
@@ -1553,7 +1553,7 @@ netmice <- function(data,
     length(var_levels[[v]]) > 2, logical(1))]
   if (length(multi_named)) {
     message("netimpute: `method` entries for ",
-            paste(multi_named, collapse = ", "),
+            toString(multi_named),
             " will not be used - attributes with more than two categories ",
             "are always imputed with polyreg.")
   }
@@ -1561,7 +1561,7 @@ netmice <- function(data,
   if (length(net_named) &&
       (net_update == "gibbs" || length(net_random_intercepts))) {
     message("netimpute: `method` entries for network(s) ",
-            paste(net_named, collapse = ", "), " will not be used - ties ",
+            toString(net_named), " will not be used - ties ",
             "are drawn ",
             if (net_update == "gibbs") {
               "by the tie-wise (gibbs) updater's own working model."
@@ -1576,7 +1576,7 @@ netmice <- function(data,
       function(mat) isSymmetric(unname(mat)), logical(1))]
     if (length(undirected)) {
       warning("net_random_intercepts includes 'dyad' but network(s) ",
-              paste(undirected, collapse = ", "),
+              toString(undirected),
               " are undirected: each dyad's two rows (i,j)/(j,i) are exact ",
               "duplicates, so a dyad random intercept has effectively one ",
               "unique observation per group and will absorb the residual ",
@@ -1590,7 +1590,7 @@ netmice <- function(data,
   unused_models <- setdiff(names(model_map), c(vm_names, net_missing_names))
   if (length(unused_models)) {
     message("netimpute: `models` formula(s) for ",
-            paste(unused_models, collapse = ", "),
+            toString(unused_models),
             " will not be used - that variable/network has no missing values to impute.")
   }
 
@@ -1738,7 +1738,7 @@ complete_netmice <- function(x, action = 1) {
 #' random intercepts, structural zeros, custom `models`, per-target
 #' predictor selection).
 #'
-#' @param x A `netmids` object from \code{\link{netmice}}.
+#' @inheritParams complete_netmice
 #' @param ... Ignored, for consistency with the generic.
 #' @return `x`, invisibly.
 #' @export
@@ -1770,23 +1770,23 @@ print.netmids <- function(x, ...) {
     cat("Per-target methods:",
         paste(names(mm), mm, sep = " = ", collapse = ", "), "\n")
   }
-  cat("Variables with missingness:", paste(x$var_missing, collapse = ", "), "\n")
-  cat("Networks with missingness:", paste(x$net_missing, collapse = ", "), "\n")
+  cat("Variables with missingness:", toString(x$var_missing), "\n")
+  cat("Networks with missingness:", toString(x$net_missing), "\n")
   if (identical(x$net_update, "gibbs")) {
     cat("Network-tie updating: sequential Gibbs (single-tie draws with",
         "change statistics)\n")
   }
   if (length(x$net_random_intercepts)) {
     cat("Network-tie random intercepts (lme4):",
-        paste(x$net_random_intercepts, collapse = ", "), "\n")
+        toString(x$net_random_intercepts), "\n")
   }
   if (length(x$structural)) {
     has_struct <- !vapply(x$structural, is.null, logical(1))
     cat("Structurally absent ties (fixed zeros) in:",
-        paste(names(x$structural)[has_struct], collapse = ", "), "\n")
+        toString(names(x$structural)[has_struct]), "\n")
   }
   if (length(x$models)) {
-    cat("Custom models for:", paste(names(x$models), collapse = ", "), "\n")
+    cat("Custom models for:", toString(names(x$models)), "\n")
   }
   if (inherits(x$predictor_selection, "netquickpred")) {
     qp <- x$predictor_selection
@@ -1794,7 +1794,7 @@ print.netmids <- function(x, ...) {
         "- steps", qp$steps, "- collinearity", qp$collin_method, "\n")
     if (length(qp$drop$attributes) || length(qp$drop$networks)) {
       cat("Dropped (not target/predictor):",
-          paste(c(qp$drop$attributes, qp$drop$networks), collapse = ", "),
+          toString(c(qp$drop$attributes, qp$drop$networks)),
           "\n")
     }
   }

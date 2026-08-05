@@ -9,7 +9,7 @@
 #' homophily block calls them per node x per measure x per attribute).
 #' as_adj_list() returns the identical neighbor sets - including counting a
 #' mutual tie twice under mode = "all", matching neighbors() - in one call.
-#' @keywords internal
+#' @noRd
 .adj_int_list <- function(g, mode) {
   lapply(igraph::as_adj_list(g, mode = mode), as.integer)
 }
@@ -18,7 +18,7 @@
 #'
 #' For undirected graphs the out- and in-lists are the all-list itself (no
 #' copies), mirroring how neighbors(mode = "out"/"in") behaves there.
-#' @keywords internal
+#' @noRd
 .neighbor_lists <- function(g) {
   all_nb <- .adj_int_list(g, "all")
   if (igraph::is_directed(g)) {
@@ -30,7 +30,7 @@
 
 #' E-I index per node: (external - internal ties) / total ties
 #' Negative = homophilous (mostly ties to same category), positive = heterophilous.
-#' @keywords internal
+#' @noRd
 .ei_index <- function(g, x, nb_all = NULL) {
   if (is.null(nb_all)) nb_all <- .adj_int_list(g, "all")
   vapply(seq_along(nb_all), function(i) {
@@ -44,7 +44,7 @@
 }
 
 #' Blau's index of heterogeneity of alters' attribute values: 1 - sum(p_k^2)
-#' @keywords internal
+#' @noRd
 .blau_index <- function(g, x, nb_all = NULL) {
   if (is.null(nb_all)) nb_all <- .adj_int_list(g, "all")
   # tabulate() on the factor's integer codes replaces a per-node table()
@@ -61,7 +61,7 @@
 }
 
 #' Modal category among a node's alters
-#' @keywords internal
+#' @noRd
 .alter_mode <- function(g, x, nb_all = NULL) {
   if (is.null(nb_all)) nb_all <- .adj_int_list(g, "all")
   # factor levels are sorted like table()'s dimnames, so which.max() breaks
@@ -84,7 +84,7 @@
 #' ego's own value, so they remain valid predictors even for the attribute
 #' being imputed; the incoming-tie mean is especially valuable there, since
 #' incoming ties are typically reported by (observed) others.
-#' @keywords internal
+#' @noRd
 .alter_continuous_stats <- function(g, x, nb_lists = NULL) {
   if (is.null(nb_lists)) nb_lists <- .neighbor_lists(g)
   rows <- lapply(seq_along(nb_lists$all), function(i) {
@@ -94,7 +94,7 @@
     # min/max (unlike mean) return +/-Inf with a warning when every alter's
     # value is NA - e.g. screening on pre-imputation data - so guard on
     # having at least one non-NA alter value
-    any_all <- any(!is.na(x[nb_all]))
+    any_all <- !all(is.na(x[nb_all]))
     c(
       diff_out       = if (length(nb_out)) mean(abs(x[i] - x[nb_out]),
                                                 na.rm = TRUE) else NA_real_,
@@ -123,7 +123,7 @@
 #' @param g igraph object
 #' @param attributes data.frame of node attributes, aligned to V(g)
 #' @param attr_types named character vector overriding auto-detected types
-#' @keywords internal
+#' @noRd
 .homophily_block <- function(g, attributes, attr_types = NULL) {
   types <- .resolve_attr_types(attributes, attr_types)
   # neighbor lists are attribute-independent: build them once here and reuse
