@@ -31,7 +31,7 @@ New submission
   runnable, but the first of them loads the imputation engine (`mice` and
   its dependencies), which alone takes several seconds in a fresh session;
   the imputation itself takes about one second at the sizes used. The
-  example datasets were kept deliberately small for this reason.
+  example datasets were kept small for this reason.
 
 * Where any example is reported above five seconds, the time is dominated
   by loading a dependency on first use (`mice`, or `sna` for the

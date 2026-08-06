@@ -9,6 +9,14 @@ chained-equations loop, so that each side informs the other.
 
 ## Installation
 
+Install the released version from CRAN:
+
+``` r
+install.packages("netimpute")
+```
+
+Or the development version from GitHub:
+
 ``` r
 # install.packages("remotes")
 remotes::install_github("RWKrause/netimpute")

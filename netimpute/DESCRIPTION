@@ -6,7 +6,7 @@ Authors@R: c(
     person(
       "Robert W.", "Krause",
       email = "robert.w.krause@mailbox.org",
-      role = c("aut", "cre")
+      role = c("aut", "cre", "cph")
     )
   )
 Description: Imputes networks and nodal attributes with multiple imputation

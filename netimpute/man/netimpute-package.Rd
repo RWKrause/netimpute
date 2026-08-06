@@ -32,11 +32,11 @@ Useful links:
 
 }
 \author{
-\strong{Maintainer}: Robert W. Krause \email{robert.w.krause@mailbox.org}
+\strong{Maintainer}: Robert W. Krause \email{robert.w.krause@mailbox.org} [copyright holder]
 
 Authors:
 \itemize{
-  \item Robert W. Krause \email{robert.w.krause@mailbox.org}
+  \item Robert W. Krause \email{robert.w.krause@mailbox.org} [copyright holder]
 }
 
 }
