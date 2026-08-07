@@ -1,9 +1,5 @@
 # netimpute 1.0.0
 
-# netimpute 1.0.1
-
-# netimpute 1.0.0
-
 * First release.
 
 * `netmice()` jointly imputes missing nodal attributes and missing network

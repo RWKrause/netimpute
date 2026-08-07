@@ -2,7 +2,7 @@
 
 ## Submission
 
-This is a new submission (netimpute 1.0.1).
+This is a new submission (netimpute 1.0.0).
 
 ## Test environments
 

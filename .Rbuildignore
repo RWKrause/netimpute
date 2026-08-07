@@ -7,5 +7,8 @@
 ^\.Rhistory$
 ^cran-comments\.md$
 ^\.github$
+^\.git$
+^\.gitignore$
+^\.gitattributes$
 ^.*\.Rcheck$
 ^.*\.tar\.gz$
