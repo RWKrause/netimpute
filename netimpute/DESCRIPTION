@@ -24,7 +24,8 @@ Description: Imputes networks and nodal attributes with multiple imputation
     based on attributes, attribute-network interactions, or network
     features. Note that the package creates many variables internally;
     please check the naming conventions in the documentation to make sure
-    that they do not clash with your own variable names. The methods build
+    that they do not clash with your own variable names. For an introduction
+    see Krause (2026) <doi:10.48550/arXiv.2608.05895>. The methods build
     on the chained equations approach of van Buuren and Groothuis-Oudshoorn
     (2011) <doi:10.18637/jss.v045.i03> and, for the tie model, on the
     multiple regression quadratic assignment procedure of Krackhardt (1988)
