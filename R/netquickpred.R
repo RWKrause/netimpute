@@ -314,6 +314,12 @@
 #' @param structural Optional structural-zero specification, as in
 #'   \code{\link{netmice}}; structurally absent dyads are excluded from the
 #'   dyad-level screening.
+#' @param net_directed Optional named logical vector, one entry per network,
+#'   fixing which networks are directed. `NULL` (default) derives it from
+#'   the supplied matrices with `isSymmetric()`, before missing cells are
+#'   zero-filled for screening. Supply it only to keep the classification
+#'   identical to one made elsewhere - \code{\link{netmice}} passes its own
+#'   so that a precomputed selection and the imputation chain agree.
 #'
 #' @return An object of class `"netquickpred"`: a list with
 #' \describe{
@@ -331,6 +337,11 @@
 #'   \item{mincor, steps, collin_method, collin_threshold, use_missingness,
 #'     measure_set}{The settings used.}
 #' }
+#' @seealso \code{\link{netmice}}, which accepts the returned object as
+#'   `predictor_selection`; \code{\link{net_measures}} for the node-level
+#'   features screened here and \code{\link{dyad_regression}} for the
+#'   dyad-level terms; \code{\link{print.netquickpred}} for the summary
+#'   method.
 #' @export
 #'
 #' @examples
@@ -355,7 +366,8 @@ netquickpred <- function(data,
                          use_missingness = TRUE,
                          measure_set = "core",
                          attr_types = NULL,
-                         structural = NULL) {
+                         structural = NULL,
+                         net_directed = NULL) {
   collin_method <- match.arg(collin_method)
   if (is.null(collin_threshold)) {
     collin_threshold <- switch(collin_method, pairwise = 0.9, vif = 10,
@@ -431,8 +443,25 @@ netquickpred <- function(data,
   feat_src_net <- character(0)
   multi <- length(net_names) > 1
   if (has_nets) {
+    # directedness must be read from `mats` (NAs intact): zero-filling can
+    # make a directed network symmetric, and detecting on `mats_zero` would
+    # then rebuild it as undirected
+    if (is.null(net_directed)) {
+      net_directed <- !vapply(mats, function(m) isSymmetric(unname(m)),
+                              logical(1))
+    } else {
+      if (!is.logical(net_directed) || anyNA(net_directed) ||
+          is.null(names(net_directed)) ||
+          !all(net_names %in% names(net_directed))) {
+        stop("`net_directed` must be a named logical vector without NA, ",
+             "with one entry per network in `net_list`.", call. = FALSE)
+      }
+      net_directed <- net_directed[net_names]
+    }
     mats_zero <- lapply(mats, function(m) { m[is.na(m)] <- 0; m })
-    gs <- lapply(mats_zero, .mat_to_igraph)
+    gs <- lapply(net_names, function(nm)
+      .mat_to_igraph(mats_zero[[nm]], directed = net_directed[[nm]]))
+    names(gs) <- net_names
     feat_df <- .net_feature_frame(gs, data, measure_set, attr_types = types,
                                   net_names = net_names,
                                   clash_names = var_names)
@@ -721,6 +750,8 @@ netquickpred <- function(data,
 #' @param x A `netquickpred` object from \code{\link{netquickpred}}.
 #' @param ... Ignored, for consistency with the generic.
 #' @return `x`, invisibly.
+#' @seealso \code{\link{netquickpred}} to create the object;
+#'   \code{\link{netmice}} to use it as `predictor_selection`.
 #' @export
 #'
 #' @examples

@@ -37,3 +37,8 @@ fit <- netmice(attrs, list(friends = friends), m = 2, maxit = 2,
 print(fit)
 }
 }
+\seealso{
+\code{\link{netmice}} to create the object;
+  \code{\link{complete_netmice}} to extract a completed dataset;
+  \code{\link{plot.netmids}} for convergence diagnostics.
+}

@@ -673,3 +673,259 @@ test_that("print.netmids: prints a human-readable summary", {
   expect_output(print(fit), "netmids")
   expect_output(print(fit), "Imputations")
 })
+
+# --- undirected networks stay undirected -------------------------------------
+# Mirror cells of an undirected network are two records of ONE tie. Drawing
+# them independently desymmetrizes the matrix, which silently reclassifies the
+# network as directed for every derived measure (all of which detect
+# directedness with isSymmetric()).
+
+make_undirected_fixture <- function(n = 22, seed = 707, weighted = FALSE, k = 40) {
+  set.seed(seed)
+  m <- if (weighted) {
+    matrix(rpois(n * n, 0.8), n, n)
+  } else {
+    matrix(rbinom(n * n, 1, 0.25), n, n)
+  }
+  diag(m) <- 0
+  m[lower.tri(m)] <- t(m)[lower.tri(m)]
+  m[sample(which(upper.tri(m)), k)] <- NA
+  m[lower.tri(m)] <- t(m)[lower.tri(m)]   # keep the NA pattern symmetric too
+  attrs <- fx_attrs(n = n, seed = seed)[c("age", "status")]
+  attrs$age[sample(n, 3)] <- NA
+  list(attrs = attrs, net = m)
+}
+
+test_that("netmice: an undirected binary network is still undirected after imputation", {
+  fx <- make_undirected_fixture()
+  expect_true(isSymmetric(unname(fx$net)))
+  for (upd in c("gibbs", "simultaneous")) {
+    fit <- netmice(fx$attrs, list(u = fx$net), m = 2, maxit = 3, seed = 9,
+                   net_update = upd, printFlag = FALSE)
+    for (a in seq_len(2)) {
+      out <- complete_netmice(fit, a)$net_list$u
+      expect_true(isSymmetric(unname(out)),
+                  info = paste("net_update =", upd, "imputation", a))
+      # observed cells untouched, and the result is a valid binary network
+      expect_equal(out[!is.na(fx$net)], fx$net[!is.na(fx$net)])
+      expect_true(all(out %in% c(0, 1)))
+    }
+  }
+})
+
+test_that("netmice: an undirected weighted network is still undirected after imputation", {
+  fx <- make_undirected_fixture(weighted = TRUE)
+  for (upd in c("gibbs", "simultaneous")) {
+    fit <- netmice(fx$attrs, list(u = fx$net), m = 1, maxit = 3, seed = 4,
+                   net_update = upd, printFlag = FALSE)
+    out <- complete_netmice(fit, 1)$net_list$u
+    expect_true(isSymmetric(unname(out)), info = paste("net_update =", upd))
+    expect_equal(out[!is.na(fx$net)], fx$net[!is.na(fx$net)])
+  }
+})
+
+test_that("netmice: undirected symmetry survives net_init = 'sample'", {
+  fx <- make_undirected_fixture()
+  fit <- netmice(fx$attrs, list(u = fx$net), m = 1, maxit = 2, seed = 5,
+                 net_init = "sample", printFlag = FALSE)
+  expect_true(isSymmetric(unname(complete_netmice(fit, 1)$net_list$u)))
+})
+
+test_that("netmice: undirected handling leaves directed networks asymmetric", {
+  # guard against over-symmetrizing: a directed network must NOT be forced
+  fx <- make_missing_fixture()
+  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, seed = 3,
+                 printFlag = FALSE)
+  expect_false(isSymmetric(unname(complete_netmice(fit, 1)$net_list$friends)))
+})
+
+test_that(".symmetrize_imputed: reconciles disagreeing pairs and spares observed cells", {
+  m <- matrix(0, 4, 4)
+  m[1, 2] <- 1; m[2, 1] <- 0      # both imputed, disagree
+  m[3, 4] <- 1; m[4, 3] <- 0      # (3,4) observed, (4,3) imputed
+  ry <- matrix(FALSE, 4, 4)
+  ry[3, 4] <- TRUE
+  set.seed(1)
+  out <- netimpute:::.symmetrize_imputed(m, ry, binary = TRUE)
+  expect_true(isSymmetric(unname(out)))
+  expect_true(out[1, 2] %in% c(0, 1))
+  # the observed cell wins over the imputed mirror
+  expect_equal(out[3, 4], 1)
+  expect_equal(out[4, 3], 1)
+
+  w <- matrix(0, 3, 3)
+  w[1, 2] <- 4; w[2, 1] <- 2      # weighted: average
+  out_w <- netimpute:::.symmetrize_imputed(w, matrix(FALSE, 3, 3), binary = FALSE)
+  expect_equal(out_w[1, 2], 3)
+  expect_equal(out_w[2, 1], 3)
+})
+
+test_that(".impute_ties_gibbs: change statistics stay exact when writing both cells of a pair", {
+  # the undirected path writes two cells per draw, so the incremental
+  # two-path bookkeeping is applied twice per visited pair
+  set.seed(23)
+  n <- 15
+  m <- matrix(rbinom(n * n, 1, 0.25), n, n); diag(m) <- 0
+  m[lower.tri(m)] <- t(m)[lower.tri(m)]
+  m[sample(which(upper.tri(m)), 30)] <- NA
+  m[lower.tri(m)] <- t(m)[lower.tri(m)]
+  attrs <- data.frame(age = rnorm(n), grade = rnorm(n))
+  filled <- netimpute:::.init_fill_matrix(m, init = "zero", undirected = TRUE)
+  built <- suppressMessages(
+    netimpute:::.build_dyad_data(list(net = filled), attrs, 1))
+  d <- built$data
+  ry <- !is.na(m)[cbind(d$i, d$j)]
+  x <- netimpute:::.clean_predictor_matrix(
+    d[setdiff(names(d), c("i", "j", "y"))], ry = ry)
+  out <- netimpute:::.impute_ties_gibbs(d = d, ry = ry, x = x, mat = filled,
+                                        binary = TRUE, donors = 5,
+                                        check = TRUE, undirected = TRUE)
+  obs <- !is.na(m) & (row(m) != col(m))
+  expect_identical(out[obs], m[obs])
+  expect_true(isSymmetric(unname(out)))
+})
+
+test_that(".init_fill_matrix: sample init keeps an undirected network symmetric", {
+  set.seed(31)
+  n <- 12
+  m <- matrix(rbinom(n * n, 1, 0.3), n, n); diag(m) <- 0
+  m[lower.tri(m)] <- t(m)[lower.tri(m)]
+  m[sample(which(upper.tri(m)), 20)] <- NA
+  m[lower.tri(m)] <- t(m)[lower.tri(m)]
+  expect_true(isSymmetric(unname(
+    netimpute:::.init_fill_matrix(m, init = "sample", undirected = TRUE))))
+  # without the flag the fills are independent per cell (directed behaviour)
+  expect_true(isSymmetric(unname(
+    netimpute:::.init_fill_matrix(m, init = "zero", undirected = TRUE))))
+})
+
+# --- directedness is derived once, from the data passed to netmice() ---------
+# Filling destroys the evidence: a directed network whose asymmetry lies
+# entirely in its missing cells becomes symmetric once those are zeroed, so
+# anything re-deriving directedness downstream would misclassify it.
+
+pathological_directed <- function() {
+  n <- 6
+  m <- matrix(0, n, n)
+  m[1, 2] <- 1; m[2, 1] <- 1
+  m[3, 4] <- 1; m[4, 3] <- 1
+  m[5, 6] <- NA; m[6, 5] <- 0
+  diag(m) <- 0
+  m
+}
+
+test_that(".mat_to_igraph: uses the supplied classification, not the filled state", {
+  m <- pathological_directed()
+  filled <- netimpute:::.init_fill_matrix(m, init = "zero")
+  expect_false(isSymmetric(unname(m)))       # input: directed
+  expect_true(isSymmetric(unname(filled)))   # filled: looks undirected
+
+  expect_true(igraph::is_directed(
+    netimpute:::.mat_to_igraph(filled, directed = TRUE)))
+  expect_false(igraph::is_directed(
+    netimpute:::.mat_to_igraph(filled, directed = FALSE)))
+  # NULL keeps the old self-detecting behaviour for standalone callers
+  expect_false(igraph::is_directed(netimpute:::.mat_to_igraph(filled)))
+})
+
+test_that(".mat_to_igraph: mode = 'max' matches mode = 'undirected' on symmetric input", {
+  set.seed(77)
+  for (w in c(FALSE, TRUE)) {
+    m <- if (w) matrix(rpois(100, 0.8), 10, 10) else matrix(rbinom(100, 1, 0.3), 10, 10)
+    m[lower.tri(m)] <- t(m)[lower.tri(m)]
+    diag(m) <- 0
+    wt <- if (any(m[m != 0] != 1)) TRUE else NULL
+    ref <- igraph::graph_from_adjacency_matrix(m, mode = "undirected",
+                                               weighted = wt, diag = FALSE)
+    got <- netimpute:::.mat_to_igraph(m, directed = FALSE)
+    at <- if (is.null(wt)) NULL else "weight"
+    expect_equal(igraph::as_adjacency_matrix(got, sparse = FALSE, attr = at),
+                 igraph::as_adjacency_matrix(ref, sparse = FALSE, attr = at))
+  }
+  # and it does not warn on the asymmetric state a dependence mask can leave
+  asym <- matrix(0, 4, 4); asym[1, 2] <- 1
+  expect_silent(netimpute:::.mat_to_igraph(asym, directed = FALSE))
+})
+
+test_that("netmice: a misclassified directed network would lose reciprocity_ratio", {
+  # the concrete consequence of re-deriving directedness from a filled
+  # matrix: reciprocity_ratio is NA for an undirected graph, so the feature
+  # is silently blanked for that visit
+  m <- pathological_directed()
+  filled <- netimpute:::.init_fill_matrix(m, init = "zero")
+  attrs <- data.frame(age = as.numeric(1:6))
+  ff <- function(dir) suppressMessages(netimpute:::.net_feature_frame(
+    list(x = netimpute:::.mat_to_igraph(filled, directed = dir)),
+    attrs, "core", attr_types = c(age = "continuous"),
+    net_names = "x", clash_names = "age"))$reciprocity_ratio
+  expect_false(all(is.na(ff(TRUE))))   # kept as a live predictor
+  expect_true(all(is.na(ff(FALSE))))   # lost if misclassified
+})
+
+test_that("netmice: runs end to end on a network whose filled state is symmetric", {
+  m <- pathological_directed()
+  attrs <- data.frame(age = c(1, NA, 3, 4, NA, 6))
+  fit <- netmice(attrs, list(x = m), m = 1, maxit = 2, seed = 1,
+                 printFlag = FALSE)
+  out <- complete_netmice(fit, 1)$net_list$x
+  obs <- !is.na(m) & (row(m) != col(m))
+  expect_equal(out[obs], m[obs])       # observed ties untouched
+  expect_false(anyNA(out))
+})
+
+# --- length-1 sampling ------------------------------------------------------
+# sample(x) treats a length-1 NUMERIC x as 1:x, so a network with exactly one
+# missing tie (or a variable with exactly one observed value) would sweep over
+# the wrong index set and overwrite observed data.
+
+test_that(".shuffle/.resample: a single element is not reinterpreted as 1:x", {
+  expect_identical(netimpute:::.shuffle(29L), 29L)
+  expect_identical(netimpute:::.shuffle(c(3L, 7L))[order(netimpute:::.shuffle(c(3L, 7L)))],
+                   c(3L, 7L))
+  expect_length(netimpute:::.shuffle(integer(0)), 0)
+  expect_identical(netimpute:::.resample(5, 3), c(5, 5, 5))
+  expect_true(all(netimpute:::.resample(c(2, 9), 20) %in% c(2, 9)))
+  # a plain permutation is still a permutation
+  set.seed(1)
+  expect_setequal(netimpute:::.shuffle(1:10), 1:10)
+})
+
+test_that("netmice: a network with exactly ONE missing tie leaves every observed tie intact", {
+  n <- 6
+  m <- matrix(0, n, n)
+  m[1, 2] <- 1; m[2, 1] <- 1; m[3, 4] <- 1; m[4, 3] <- 1
+  m[5, 6] <- NA
+  diag(m) <- 0
+  attrs <- data.frame(age = c(1, NA, 3, 4, NA, 6))
+  for (upd in c("gibbs", "simultaneous")) {
+    fit <- netmice(attrs, list(x = m), m = 1, maxit = 2, seed = 1,
+                   net_update = upd, printFlag = FALSE)
+    out <- complete_netmice(fit, 1)$net_list$x
+    obs <- !is.na(m) & (row(m) != col(m))
+    expect_equal(out[obs], m[obs], info = upd)   # observed ties untouched
+    expect_false(anyNA(out))
+    expect_true(out[5, 6] %in% c(0, 1))
+  }
+})
+
+test_that("netmice: an undirected network with exactly ONE missing pair is handled", {
+  n <- 6
+  m <- matrix(0, n, n)
+  m[1, 2] <- 1; m[2, 1] <- 1; m[3, 4] <- 1; m[4, 3] <- 1
+  m[5, 6] <- NA; m[6, 5] <- NA
+  diag(m) <- 0
+  expect_true(isSymmetric(unname(m)))
+  attrs <- data.frame(age = c(1, NA, 3, 4, NA, 6))
+  fit <- netmice(attrs, list(x = m), m = 1, maxit = 2, seed = 1,
+                 printFlag = FALSE)
+  out <- complete_netmice(fit, 1)$net_list$x
+  obs <- !is.na(m) & (row(m) != col(m))
+  expect_equal(out[obs], m[obs])
+  expect_true(isSymmetric(unname(out)))
+})
+
+test_that(".init_fill_vector: a single observed value is used, not 1:value", {
+  x <- c(NA, NA, 7, NA)
+  set.seed(1)
+  expect_equal(netimpute:::.init_fill_vector(x), c(7, 7, 7, 7))
+})

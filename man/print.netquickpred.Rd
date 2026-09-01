@@ -33,3 +33,7 @@ qp <- netquickpred(attrs, list(friends = friends),
                    targets = "performance", mincor = 0.4)
 print(qp)
 }
+\seealso{
+\code{\link{netquickpred}} to create the object;
+  \code{\link{netmice}} to use it as `predictor_selection`.
+}

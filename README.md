@@ -69,5 +69,12 @@ shared-partner indicator refreshed after every single draw.
 - `method` — any of `mice`'s numeric-response univariate methods, globally
   or per target.
 
+## Learn more
+
+`vignette("netimpute")` is a worked introduction: a first imputation,
+convergence checks, pooling with `mice::pool()`, the predictor naming
+conventions, custom `models`, predictor selection, structural and
+between-network constraints, and how undirected networks are handled.
+
 See `?netmice` for the full argument reference, including the complete
 lists of dyad-level term names and implemented network measures.

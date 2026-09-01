@@ -1,0 +1,311 @@
+---
+title: "Introduction to netimpute"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Introduction to netimpute}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 4.5
+)
+set.seed(2024)
+```
+
+## Why impute both sides at once
+
+Missing data in a network study rarely stays on one side. The respondent who
+skipped half the questionnaire is often the same one whose nominations are
+missing, so the attributes you would use to impute the ties are themselves
+incomplete — and the ties you would use to impute the attributes are too.
+
+`netimpute` runs both through a single chained-equations loop. Within each
+iteration every incomplete attribute and every incomplete network is visited
+exactly once, in one interleaved, randomly ordered sequence. Whatever was
+updated most recently — attribute or network — feeds the next target's
+predictors. Attributes are imputed from the other attributes plus node-level
+network measures; ties are imputed from a dyad-level model built from the
+attributes and the other networks.
+
+```{r}
+library(netimpute)
+```
+
+## The example data
+
+Thirty employees, two networks, and four attributes. Missingness is scattered
+across both sides.
+
+```{r}
+n <- 30
+
+make_net <- function(p) {
+  m <- matrix(rbinom(n * n, 1, p), n, n)
+  diag(m) <- 0
+  m
+}
+punch <- function(m, k) {
+  m[sample(which(row(m) != col(m)), k)] <- NA
+  m
+}
+
+friends <- punch(make_net(0.15), 60)
+advice  <- punch(make_net(0.10), 40)
+
+staff <- data.frame(
+  age    = round(rnorm(n, 40, 9)),
+  female = rbinom(n, 1, 0.5),
+  unit   = sample(c("sales", "eng", "hr"), n, TRUE),
+  perf   = rnorm(n)
+)
+staff$age[sample(n, 4)]  <- NA
+staff$perf[sample(n, 5)] <- NA
+staff$unit[sample(n, 3)] <- NA
+
+nets <- list(friends = friends, advice = advice)
+
+colSums(is.na(staff))
+vapply(nets, function(m) sum(is.na(m)), integer(1))
+```
+
+## A first imputation
+
+`netmice()` is the entry point. `m` is the number of imputed datasets,
+`maxit` the number of iterations per chain — the same meaning they have in
+`mice`.
+
+```{r}
+fit <- netmice(staff, nets, m = 5, maxit = 10, seed = 1, printFlag = FALSE)
+fit
+```
+
+The message about inferred attribute types is worth reading: `netimpute`
+decides whether each column is continuous, binary, or multinomial, and that
+decision drives both how the column is imputed and what its predictor terms
+are called. Override it with `attr_types` if it guesses wrong.
+
+`complete_netmice()` extracts one completed dataset — attributes and networks
+together.
+
+```{r}
+done <- complete_netmice(fit, 1)
+str(done$data)
+sum(is.na(done$net_list$friends))
+```
+
+## Checking convergence
+
+`plot()` shows the usual chain diagnostics on three pages: the mean and
+variance of the imputed values per iteration for each attribute; density,
+reciprocity, transitivity, isolate count and average inverse geodesic distance
+for each network; and, for each network that had missing ties, the mean and
+variance of the *imputed ties only*. You are looking for the chains to mix, not
+to trend.
+
+Read the third page first. The network diagnostics on the second page are
+computed on the whole completed network, observed ties included, so they are
+diluted by the missingness fraction: with 7% of dyads missing, a swing of 0.20
+in the density of the imputed cells shows up as a movement of only about 0.014
+in the network's overall density. A flat trace on page two is therefore *not*
+evidence of convergence when missingness is low — the imputed-tie traces are the
+sensitive ones, and they are what the attribute page has always shown for
+attributes.
+
+```{r, fig.alt = "Convergence diagnostics across iterations"}
+plot(fit, nets = "friends", ask = FALSE)
+```
+
+If the imputed-tie traces are still drifting at the last iteration, raise
+`maxit`. A steadily climbing imputed-tie mean is the signature of tie inflation
+specifically, rather than of slow mixing in general.
+
+The numbers behind the plots are on the fitted object: `chainMean`/`chainVar`
+for attributes, `netChain` for the whole-network diagnostics, and
+`netImpMean`/`netImpVar` for the imputed ties.
+
+## Using the completed data
+
+There is no pooling helper: fit your model to each completed dataset and pool
+with `mice::pool()`. Anything you derive from the imputed networks — degree,
+centrality, a contagion term — is computed inside the loop, so its uncertainty
+flows into the pooled standard errors.
+
+```{r}
+fits <- lapply(seq_len(fit$m), function(k) {
+  d <- complete_netmice(fit, k)
+  d$data$friends_indeg <- colSums(d$net_list$friends)
+  lm(perf ~ age + friends_indeg, data = d$data)
+})
+
+summary(mice::pool(fits))
+```
+
+## Predictor names: the one thing to get right
+
+If you want to steer the imputation models yourself, you need the names of the
+internally generated terms — and the naming rule depends on the attribute
+type. **Continuous** attributes get bare `_ego` / `_alter` / `_absdiff` terms.
+**Binary and multinomial** attributes are dummy-coded, one term per
+non-reference level.
+
+Rather than guessing, list them. `dyad_regression()` builds exactly the design
+`netmice()` uses at a network visit, and `fit = FALSE` stops before fitting:
+
+```{r}
+terms <- names(dyad_regression(nets, staff, target = "friends",
+                               fit = FALSE)$data)
+setdiff(terms, c("i", "j", "y"))
+```
+
+Note the difference between `age` (continuous) and `female` / `unit`
+(categorical):
+
+```{r}
+grep("^age",    terms, value = TRUE)
+grep("^female", terms, value = TRUE)
+grep("^unit",   terms, value = TRUE)
+```
+
+`female` is 0/1, so it is inferred as **binary** and its term is
+`female_ego_1` — not `female_ego`. Had it been coded `"m"`/`"f"`, the term
+would be `female_ego_m` or `female_ego_f`, depending on which level sorts
+first and becomes the reference. This is the most common source of "why
+doesn't my `models` formula work".
+
+The node-level names an *attribute* model can reference come from
+`net_measures()`, prefixed with the network name when more than one network is
+supplied:
+
+```{r}
+g <- igraph::graph_from_adjacency_matrix(
+  replace(friends, is.na(friends), 0), mode = "directed", diag = FALSE)
+head(names(net_measures(g, staff)), 12)
+```
+
+Both lists are reproduced in full in the "Dyad-level term names" and
+"Implemented network measures" sections of `?netmice`.
+
+## Steering the models
+
+`models` protects a hypothesised relationship: the terms you name always enter
+that target's imputation model, whatever the automatic predictor machinery
+decides. Formulas are given as strings; the left-hand side names the target.
+
+```{r}
+fit2 <- netmice(
+  staff, nets, m = 5, maxit = 10, seed = 1, printFlag = FALSE,
+  models = list(
+    "friends ~ female_ego_1:reciprocity",
+    "perf    ~ age + friends_indegree"
+  )
+)
+```
+
+The first formula is an interaction between an ego attribute and reciprocity:
+*do women reciprocate friendship nominations differently?* Under the default
+tie-wise updater (`net_update = "gibbs"`) the reciprocity factor in that
+interaction is re-read from the live network after **every single tie draw**,
+not held at its value from the start of the visit — which is what makes an
+endogenous interaction meaningful here.
+
+## Leaner models
+
+By default every attribute and every network feature is a candidate predictor,
+with a PCA safeguard if that gets too wide for the number of observed cases.
+`netquickpred()` instead screens predictors per target by correlation, adds
+predictors-of-predictors recursively, and prunes collinear survivors.
+
+```{r}
+qp <- netquickpred(staff, nets)
+qp
+```
+
+Pass it straight to `netmice()`, or use `predictor_selection = "quickpred"` to
+have it computed internally:
+
+```{r}
+fit3 <- netmice(staff, nets, m = 5, maxit = 10, seed = 1, printFlag = FALSE,
+                predictor_selection = qp)
+```
+
+## Constraints on where ties can exist
+
+`structural` marks cells that are zero *by design* — nominations that could not
+have been made, such as ties into another school class. They are fixed at zero,
+excluded from the model, and never imputed.
+
+```{r}
+structural <- matrix(FALSE, n, n)
+structural[1:10, 11:30] <- TRUE
+structural[11:30, 1:10] <- TRUE
+
+friends_split <- friends
+friends_split[structural] <- 0
+
+fit4 <- netmice(staff, list(friends = friends_split), structural = structural,
+                m = 3, maxit = 5, seed = 1, printFlag = FALSE)
+all(complete_netmice(fit4, 1)$net_list$friends[structural] == 0)
+```
+
+`net_dependence` expresses logical relations *between* networks: `necessary`
+means a tie in the parent is required for a tie in the child, `forbidden` that
+two ties are mutually exclusive. Unlike `structural`, these are re-evaluated
+against the partner network's current state at every visit, so the constrained
+set adapts as the partner is itself imputed.
+
+```{r}
+# advice can only run along friendship ties
+friends_full <- make_net(0.25)
+advice_sub   <- friends_full * matrix(rbinom(n * n, 1, 0.5), n, n)
+
+fit5 <- netmice(
+  staff,
+  list(friends = punch(friends_full, 50), advice = punch(advice_sub, 50)),
+  net_dependence = list(necessary = list(c("friends", "advice"))),
+  m = 3, maxit = 5, seed = 1, printFlag = FALSE
+)
+
+out <- complete_netmice(fit5, 1)$net_list
+all(out$advice[out$friends == 0 & row(out$friends) != col(out$friends)] == 0)
+```
+
+## Directed and undirected networks
+
+A network counts as undirected when the matrix you supply is symmetric in its
+values **and** in its pattern of missing cells — exactly the case in which
+cells $(i,j)$ and $(j,i)$ record one tie rather than two. That classification
+is made once, from the data you pass in, and an undirected network is imputed
+one tie at a time, so it comes back undirected.
+
+```{r}
+und <- make_net(0.25)
+und[lower.tri(und)] <- t(und)[lower.tri(und)]
+und[sample(which(upper.tri(und)), 40)] <- NA
+und[lower.tri(und)] <- t(und)[lower.tri(und)]
+
+fit6 <- netmice(staff, list(contact = und), m = 3, maxit = 5, seed = 1,
+                printFlag = FALSE)
+isSymmetric(unname(complete_netmice(fit6, 1)$net_list$contact))
+```
+
+The classification cannot be recovered after the fact: a directed network whose
+asymmetry happens to sit entirely in its missing cells becomes symmetric the
+moment those are filled. Supply the matrix with its `NA`s intact and the
+distinction is preserved.
+
+## Where to go next
+
+- `?netmice` — the full argument reference, plus complete lists of dyad-level
+  term names and implemented network measures.
+- `?netquickpred` — how predictors are screened, and the tuning arguments.
+- `?dyad_regression` — the tie model on its own, usable as a standalone
+  MR-QAP-style regression.
+- `?net_measures`, `?net_predictors` — the node-level measures.
+
+The methodology is described in Krause (2026),
+[arXiv:2608.05895](https://doi.org/10.48550/arXiv.2608.05895).

@@ -181,6 +181,8 @@ restricted to the missing cells, so observed ties are never resampled. This is n
 \subsection{Node-level measures}
 \label{sec:measures}
 
+A network carries a lot of information that can be useful for imputing not just
+itself but also missing attribute values. The function
 \code{net\_measures\_core(net, attributes, attr\_types = NULL, id\_col =
 NULL)} computes nine structural measures per node --- out-degree,
 in-degree, a reciprocity measure, Bonacich power centrality (with an
@@ -195,7 +197,7 @@ mean, minimum, and maximum alter value, plus the mean alter value over
 incoming and over outgoing ties separately, for continuous attributes.
 \code{net\_measures\_full()} extends this to 28 structural measures
 (the full degree family, eigenvector/alpha/PageRank centrality, structural
-holes measures, coreness, and, if \pkg{sna} is installed, its six
+holes measures, coreness, and, if \pkg{sna} is installed, six
 additional measures) using exactly the same homophily block.
 
 Both functions are wrappers around  \code{net\_measures(net, attributes, measure\_set)}: \code{measure\_set}
@@ -249,19 +251,20 @@ components capture variance orthogonal to it (\code{residualize\_kept = TRUE}) .
 \label{sec:dyad}
 
 \code{dyad\_regression()} vectorises a target network's adjacency matrix
-(excluding the diagonal) and regresses it on: for every node attribute, an
+(excluding the diagonal) and regresses it for every node attribute on an
 ego value, an alter value, and either an absolute difference (continuous
-attributes) or a same-category indicator (categorical attributes); reciprocity (the
-transposed target network); a bounded $0/1$ two-path indicator
+attributes) or a same-category indicator (categorical attributes), reciprocity
+(the transposed target network), a bounded $0/1$ two-path indicator
 (\code{twopath} --- ``at least one shared contact'', i.e.\ at least one
-path $i \to k \to j$); and, for every
+path $i \to k \to j$ to impte $x_{ij}$), and, for every
 \emph{other} network supplied, its tie value, its reciprocity (transpose), and
 the sender's and the receiver's out- and in-degree in that network. When
 many other networks are supplied, \code{other\_net\_predictors = "pca"}
 replaces the node-level degree terms with the first \code{n\_components}
-principal components; by default the dyad-level cross-network terms (the other
-network's cell and its transpose) always keep their coefficients,
-to preserve the direct relationship between the networks. The complete list of term names, as referenced from
+principal components. By default the dyad-level cross-network terms (the other
+network's cell and its transpose) are kept as predictors and not taken into the
+PCA to preserve the direct relationship between the networks. The complete list
+of term names, as referenced from
 \code{netmice()}'s \code{models} formulas, is documented in the
 \code{dyad\_regression()} help page. Dyads marked \emph{structurally
 absent} (zero by design, e.g., nominations the study design made
@@ -353,6 +356,47 @@ imputations and avoids potential synchronous-update artifacts of the alternative
 scheme, \code{net\_update = "simultaneous"}, in which one model
 per visit imputes every missing cell at once from the same snapshot
 of the statistics (e.g., if both $x_{ij}$ and $x_{ji}$ are missing, their imputation would be independent of each other).
+
+\paragraph{Undirected networks.} In an undirected network the cells
+$x_{ij}$ and $x_{ji}$ are not two ties but two records of the same tie, and
+imputing them independently would return a matrix that is no longer
+symmetric. This is more than an aesthetic defect: throughout the package
+directedness is detected from the matrix itself, so a single desymmetrized
+pair reclassifies the network as directed for every node- and dyad-level
+measure derived from it in the remaining sweeps, and in the returned
+object. A network is therefore treated as undirected whenever the supplied
+matrix is symmetric in its values \emph{and} in its pattern of missing
+cells --- precisely the case in which the two cells record one tie --- and
+is then imputed one tie at a time.
+
+This classification is established once, from the incomplete data supplied
+to \code{netmice()}, and is thereafter used wherever directedness matters:
+the tie updater, the initialisation, the node-level measures that serve as
+attribute predictors, and the per-iteration diagnostics. It deliberately is
+not re-derived from the working state, because filling destroys the
+evidence it rests on. A directed network whose asymmetry lies entirely in
+its missing cells becomes symmetric as soon as those cells are initialised
+at zero; a measure recomputed from that state would classify it as
+undirected and, for instance, return the per-node reciprocity ratio as
+missing for every node, quietly dropping a genuine predictor from that
+visit.
+
+Under tie-wise updating each unordered pair is visited once. Both
+directions' linear predictors are evaluated against the current state and
+averaged, on the probability scale for a binary tie,
+$p = \tfrac{1}{2}\left(\mathrm{logit}^{-1}(\eta_{ij}) +
+\mathrm{logit}^{-1}(\eta_{ji})\right)$, and on the linear predictor scale
+for a weighted one; the single resulting draw is written to both cells. The
+two predictors generally differ even for an undirected target, because the
+dyad-level design retains the sender/receiver-specific terms of the other
+(possibly directed) networks and of the nodal attributes, so averaging
+them, rather than arbitrarily privileging one direction, keeps the update
+symmetric in the two nodes. Under the simultaneous scheme the mirror cells
+are necessarily drawn from the same snapshot and can disagree; each
+disagreeing pair is then reconciled after the draw, by keeping one of the
+two values at random for a binary network --- each is an equally valid draw
+of the same tie --- and by averaging them for a weighted one. Observed
+cells are never overwritten by either step.
 
 Under the simultaneous scheme, the tie working model can instead be a
 linear mixed model (\code{net\_random\_intercepts}): random intercepts per
@@ -498,8 +542,8 @@ head(core_out[c("node_id", "outdegree", "indegree",
 \end{Routput}
 
 Any other subset of the implemented measures can be requested through
-\code{net\_measures()} directly (attributes are only needed when the
-homophily block is among the requested measures):
+\code{net\_measures()} directly (the `attributes' argument is only needed when
+the homophily block is among the requested measures):
 
 \begin{Rinput}
 names(net_measures(friends, measure_set = c("indegree", "betweenness",
@@ -615,10 +659,10 @@ the tracked network diagnostics are stable across iterations, consistent
 with (though of course not a substitute for a formal test of) convergence.
 
 Finally, \code{netquickpred()} (Section~\ref{sec:netquickpred}) shows
-which predictors would enter each model under per-target selection. With
-only $n = 40$ nodes, chance correlations of network measures easily exceed
-the \code{mincor} default of $0.1$, so a deliberately strict threshold
-keeps the illustration honest:
+which predictors would enter each imputation model if only those predictors with
+medium correlation with the target are considered. With only $n = 40$ nodes,
+chance correlations of network measures easily exceed the \code{mincor} default
+of $0.1$, so a strict threshold is used here purely for illustration:
 
 \begin{Rinput}
 qp <- netquickpred(attrs_miss,

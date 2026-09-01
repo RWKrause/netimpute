@@ -40,6 +40,10 @@
 #'
 #' @return A data.frame with one row per node, `node_id` followed by all
 #'   structural measures and the per-attribute homophily columns.
+#' @seealso \code{\link{net_measures}} for the full argument reference and
+#'   the list of implemented measures; \code{\link{net_measures_core}} for
+#'   the cheaper default set; \code{\link{net_predictors}} for
+#'   multi-network predictor frames.
 #' @export
 #'
 #' @examples

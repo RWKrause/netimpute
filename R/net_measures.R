@@ -223,6 +223,10 @@
 #' @return A data.frame with one row per node: `node_id`, the requested
 #'   structural measures (in a canonical column order), and - if
 #'   `"homophily"` was requested - the per-attribute homophily columns.
+#' @seealso \code{\link{net_measures_core}} and \code{\link{net_measures_full}}
+#'   for the two ready-made measure sets; \code{\link{net_predictors}} to
+#'   turn measures from several networks into one predictor frame;
+#'   \code{\link{netmice}}, which computes these as attribute predictors.
 #' @export
 #'
 #' @examples

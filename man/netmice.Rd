@@ -260,7 +260,13 @@ avoids the synchronous-update artifact of the simultaneous scheme.
 Static predictors (attribute terms, other-network terms, `models`
 extras) are evaluated once per visit and held fixed during the sweep;
 `models` interaction terms involving `reciprocity`/`twopath` are
-refreshed per draw like the main effects. `"simultaneous"`: one PMM
+refreshed per draw like the main effects. For an *undirected* network
+each unordered pair is visited once instead of each cell: both
+directions' linear predictors are evaluated against the current state
+and averaged (on the probability scale for a binary tie, on the linear
+predictor scale for a weighted one), and the single draw is written to
+both cells, so the network stays undirected - see the note below.
+`"simultaneous"`: one PMM
 working model per visit imputes every missing cell at once, all from
 the same snapshot of the endogenous statistics. `net_random_intercepts`
 requires the simultaneous scheme: combining it with an *explicit*
@@ -296,10 +302,18 @@ An object of class `"netmids"` with elements: `data`, `net_list`
   `imp_nets` (list of `m` lists of completed adjacency matrices),
   `visit_orders` (the randomized target order used in each chain),
   `chainMean`/`chainVar` (variable x iteration x m arrays of the mean/
-  variance of the *imputed* values only, as in `mice`), and `netChain`
+  variance of the *imputed* values only, as in `mice`), `netChain`
   (network x diagnostic x iteration x m array from
-  \code{\link{net_diagnostics}}). Use \code{\link{complete_netmice}} to
-  extract a completed dataset.
+  \code{\link{net_diagnostics}}, computed on the **whole completed**
+  network), and `netImpMean`/`netImpVar` (network x iteration x m arrays
+  over the networks in `net_missing`, holding the mean and variance of the
+  **imputed ties only** - the tie-side counterpart of
+  `chainMean`/`chainVar`, and the trace to read when judging convergence,
+  since `netChain` mixes in the observed ties and is correspondingly
+  insensitive when missingness is low). Note that cells fixed
+  deterministically by `net_dependence` were missing at input and so count
+  as imputed in `netImpMean`/`netImpVar`, though they are not freely drawn.
+  Use \code{\link{complete_netmice}} to extract a completed dataset.
 }
 \description{
 A mice-style chained-equations algorithm (Van Buuren's sampler
@@ -425,6 +439,33 @@ so it stays live throughout the sequential sweep. The section
 can reference; the section \emph{Implemented network measures} lists
 every measure name an attribute's formula can reference.
 }
+\section{Undirected networks}{
+
+A network is treated as undirected when its input matrix is symmetric in
+both its values and its `NA` pattern, which is exactly the case where
+cells (i, j) and (j, i) are two records of one tie. Such a network is
+imputed one *tie* at a time and comes back symmetric.
+
+Under `net_update = "gibbs"` each unordered pair is visited once: both
+directions' linear predictors are evaluated against the current state and
+averaged - on the probability scale for a binary tie
+(`p = (plogis(eta_ij) + plogis(eta_ji)) / 2`), on the linear predictor
+scale for a weighted one - and the single draw is written to both cells.
+Under `net_update = "simultaneous"` the mirror cells are necessarily drawn
+independently from the same snapshot, so disagreeing pairs are reconciled
+afterwards: for a binary network one of the two drawn values is kept at
+random, for a weighted network their average is taken. Observed cells are
+never overwritten by either step.
+
+This matters beyond tidiness: directedness is detected dynamically with
+`isSymmetric()` wherever network measures are computed, so a single
+desymmetrized pair would reclassify the network as directed for every
+derived predictor in the remaining sweeps, and in the returned object.
+If a network is genuinely directed but happens to be symmetric, add an
+asymmetric cell or treat the asymmetry as substantive - there is no way
+to distinguish the two from the matrix alone.
+}
+
 \section{Dyad-level term names (for a network's `models` formula)}{
 
 When a network is the imputation target, the working model's rows are its
@@ -528,4 +569,17 @@ fit
 completed <- complete_netmice(fit, 1)
 anyNA(completed$data)
 }
+}
+\seealso{
+\code{\link{complete_netmice}} to extract a completed
+  data.frame/network pair, \code{\link{plot.netmids}} for convergence
+  diagnostics and \code{\link{print.netmids}} for a settings summary;
+  \code{\link{netquickpred}} to build a per-target predictor selection
+  up front; \code{\link{dyad_regression}} for the tie model used at a
+  network visit and \code{\link{net_measures}} for the node-level
+  measures used at an attribute visit; \code{\link{net_diagnostics}} for
+  the per-iteration network statistics.
+
+  For a worked introduction see
+  \code{vignette("netimpute", package = "netimpute")}.
 }

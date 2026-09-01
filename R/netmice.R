@@ -13,18 +13,32 @@
 # .nm_methods - adding another numeric-response mice method is a one-line
 # change there.
 
+#' Safe permutation / resampling helpers
+#'
+#' `sample(x)` and `sample(x, k)` reinterpret a length-1 *numeric* `x` as
+#' `1:x` (see ?sample, "Details"). Every place here that shuffles a vector of
+#' indices or resamples observed values can legitimately be handed a single
+#' element - one missing tie, one observed value - so the base idiom would
+#' silently iterate over, or draw from, `1:x` instead.
+#' @noRd
+.shuffle <- function(x) x[sample.int(length(x))]
+
+#' @noRd
+.resample <- function(x, size) x[sample.int(length(x), size, replace = TRUE)]
+
 #' @noRd
 .init_fill_vector <- function(x) {
   miss <- is.na(x)
   if (!any(miss)) return(x)
   obs <- x[!miss]
   if (!length(obs)) stop("A variable is entirely missing; cannot initialize imputation.", call. = FALSE)
-  x[miss] <- sample(obs, sum(miss), replace = TRUE)
+  x[miss] <- .resample(obs, sum(miss))
   x
 }
 
 #' @noRd
-.init_fill_matrix <- function(mat, structural = NULL, init = c("zero", "sample")) {
+.init_fill_matrix <- function(mat, structural = NULL, init = c("zero", "sample"),
+                              undirected = FALSE) {
   init <- match.arg(init)
   diag(mat) <- 0
   off <- row(mat) != col(mat)
@@ -44,17 +58,40 @@
     } else {
       obs_vals <- mat[off & !is.na(mat)]
       if (!length(obs_vals)) stop("A network is entirely missing; cannot initialize imputation.", call. = FALSE)
-      mat[miss] <- sample(obs_vals, sum(miss), replace = TRUE)
+      mat[miss] <- .resample(obs_vals, sum(miss))
+      if (undirected) {
+        # independent draws per cell would start an undirected network from
+        # an asymmetric state, which flips it to "directed" for every
+        # derived measure in the first sweep: mirror the upper-triangle
+        # fills onto the matching missing lower-triangle cells instead
+        up <- miss & upper.tri(mat)
+        lo <- t(up) & miss
+        mat[lo] <- t(mat)[lo]
+      }
     }
   }
   mat
 }
 
+#' Adjacency matrix -> igraph, with directedness fixed by the caller
+#'
+#' `directed = NULL` falls back to detecting directedness from `mat` itself,
+#' which is only safe for a matrix that still carries its `NA` pattern.
+#' Callers that work on *filled* matrices (the imputation chain, the
+#' netquickpred screening block) must pass the classification derived once
+#' from the input data: an all-zero fill can make a genuinely directed
+#' network symmetric, and re-deriving per call would then silently rebuild
+#' it as undirected, collapsing in-/out-degree and pinning reciprocity at 1.
+#'
+#' The undirected branch uses `mode = "max"`, which is identical to
+#' `mode = "undirected"` for a symmetric matrix but is defined (and does not
+#' warn, as igraph >= 1.6 does) on the rare asymmetric state a `structural`
+#' or `net_dependence` mask can leave behind.
 #' @noRd
-.mat_to_igraph <- function(mat) {
-  directed <- !isSymmetric(unname(mat))
+.mat_to_igraph <- function(mat, directed = NULL) {
+  if (is.null(directed)) directed <- !isSymmetric(unname(mat))
   igraph::graph_from_adjacency_matrix(
-    mat, mode = if (directed) "directed" else "undirected",
+    mat, mode = if (directed) "directed" else "max",
     weighted = if (any(mat[mat != 0] != 1)) TRUE else NULL, diag = FALSE
   )
 }
@@ -63,14 +100,26 @@
 #'
 #' Density, (network-level) reciprocity, global transitivity, isolate count,
 #' and average inverse geodesic distance (global efficiency). The last is
-#' computed as the mean of 1/d(i,j) over all ordered pairs i != j; since
-#' `1/Inf == 0` in R, disconnected pairs (including isolates) contribute 0
+#' computed as the mean of 1/d(i,j) over all ordered pairs i != j, following
+#' *directed* paths when the network is directed (so d(i,j) and d(j,i) may
+#' differ); since `1/Inf == 0` in R, unreachable pairs (including isolates)
+#' contribute 0
 #' rather than `NaN`/`Inf` - only the (excluded) diagonal would otherwise
 #' cause a division by zero.
 #'
 #' @param mat An adjacency matrix (weights, if any, are binarized: `!= 0`).
+#' @param directed Whether to treat `mat` as directed. `NULL` (default)
+#'   infers it from `mat` with `isSymmetric()`. Pass an explicit value when
+#'   the matrix is a *completed* network whose directedness was established
+#'   from the incomplete data: a symmetric completed matrix is not evidence
+#'   that the network is undirected, and inferring it here would collapse
+#'   in-/out-degree and report reciprocity as 1. \code{\link{netmice}}
+#'   supplies its own up-front classification when tracking these
+#'   diagnostics across iterations.
 #' @return A named list: density, reciprocity, transitivity, n_isolates,
 #'   avg_inv_geodesic.
+#' @seealso \code{\link{netmice}}, which records these per iteration in
+#'   `netChain`; \code{\link{plot.netmids}} to plot them.
 #' @export
 #'
 #' @examples
@@ -78,12 +127,20 @@
 #' m <- matrix(rbinom(400, 1, 0.15), 20, 20)
 #' diag(m) <- 0
 #' net_diagnostics(m)
-net_diagnostics <- function(mat) {
+#'
+#' # a symmetric matrix that is nonetheless a directed network
+#' s <- m * t(m)
+#' net_diagnostics(s)$reciprocity                    # 1: inferred undirected
+#' net_diagnostics(s, directed = TRUE)$reciprocity   # 1, but as a directed net
+net_diagnostics <- function(mat, directed = NULL) {
   b <- (mat != 0) * 1
   diag(b) <- 0
-  directed <- !isSymmetric(unname(b))
-  g <- igraph::graph_from_adjacency_matrix(b, mode = if (directed) "directed" else "undirected", diag = FALSE)
-  d <- igraph::distances(g, mode = "all")
+  if (is.null(directed)) directed <- !isSymmetric(unname(b))
+  g <- igraph::graph_from_adjacency_matrix(b, mode = if (directed) "directed" else "max", diag = FALSE)
+  # Ordered pairs means DIRECTED paths in a directed network: mode = "all"
+  # would silently report the underlying undirected value, which is what the
+  # other directed diagnostic here (reciprocity) is careful not to do.
+  d <- igraph::distances(g, mode = if (directed) "out" else "all")
   off <- row(d) != col(d)
   inv <- 1 / d[off]
   inv[is.infinite(inv)] <- 0
@@ -95,6 +152,38 @@ net_diagnostics <- function(mat) {
     n_isolates       = sum(igraph::degree(g, mode = "all") == 0),
     avg_inv_geodesic = mean(inv)
   )
+}
+
+#' Mean and variance of the *imputed* cells of one network
+#'
+#' The tie-side counterpart of the `chainMean`/`chainVar` that netmice()
+#' already records for attributes, and the reason it exists: `net_diagnostics()`
+#' describes the whole completed network, so with little missingness its traces
+#' are dominated by the observed ties and barely move even when the imputed
+#' portion is drifting badly. Restricting to the cells the sampler actually
+#' draws removes that dilution.
+#'
+#' @param mat A completed adjacency matrix (no NAs left).
+#' @param ry Logical matrix, TRUE where the tie was *observed* - i.e. the
+#'   `ry_nets` mask. It is FALSE on the diagonal, which is excluded here
+#'   explicitly; structural zeros are TRUE (applied before the mask is built)
+#'   and so are correctly treated as observed.
+#' @param undirected Whether the network is undirected; if so only the upper
+#'   triangle is used, so each dyad counts once rather than twice.
+#' @return A list with `mean` and `var` of the imputed tie values. Both are
+#'   `NA_real_` when nothing is imputed; `var` is `NA` for a single imputed
+#'   cell, exactly as `stats::var()` of one value is.
+#' @noRd
+.imp_tie_stats <- function(mat, ry, undirected) {
+  # `ry` is FALSE on the diagonal too - it marks "observed tie", and the
+  # diagonal is no more an observation than a structural zero is. Drop it
+  # explicitly, or every self-loop cell would count as an imputed zero.
+  sel <- !ry
+  diag(sel) <- FALSE
+  if (undirected) sel <- sel & upper.tri(sel)
+  vals <- mat[sel]
+  if (!length(vals)) return(list(mean = NA_real_, var = NA_real_))
+  list(mean = mean(vals), var = stats::var(vals))
 }
 
 #' Univariate imputation methods netmice() accepts, all dispatched to the
@@ -338,11 +427,21 @@ net_diagnostics <- function(mat) {
 #' static factors are recomputed from `d` and whose endogenous factors are
 #' read off the live matrix state per cell, exactly like the main effects.
 #'
+#' `undirected = TRUE` visits each *unordered* pair once instead of each
+#' cell: the two directions' linear predictors are both evaluated against
+#' the current state and averaged - on the probability scale for a binary
+#' tie, on the linear-predictor scale for a weighted one - and the single
+#' draw is written to both cells, so the matrix stays symmetric throughout
+#' the sweep. Drawing the mirror cells independently would desymmetrize the
+#' network, which silently reclassifies it as directed for every derived
+#' measure (all of which detect directedness with `isSymmetric()`).
+#'
 #' `check = TRUE` recomputes the binarized adjacency and the two-path count
 #' matrix from scratch at the end and errors if the incremental bookkeeping
 #' diverged - used by the unit tests, skipped in production calls.
 #' @noRd
-.impute_ties_gibbs <- function(d, ry, x, mat, binary, donors, check = FALSE) {
+.impute_ties_gibbs <- function(d, ry, x, mat, binary, donors, check = FALSE,
+                               undirected = FALSE) {
   endo_int <- .gibbs_endo_interactions(colnames(x), d)
   x <- as.matrix(x)
   recip_col <- match("reciprocity", colnames(x))
@@ -392,34 +491,86 @@ net_diagnostics <- function(mat) {
   B <- (mat != 0) * 1
   Tp <- B %*% B  # two-path counts; maintained incrementally below
 
-  for (r in sample(which(!ry))) {
-    i <- d$i[r]
-    j <- d$j[r]
-    eta <- eta_base[r] + b_recip * mat[j, i] +
-      b_twop * as.numeric(Tp[i, j] > 0)
+  # linear predictor of one cell, with the endogenous statistics read off
+  # the live matrix/two-path state
+  eta_of <- function(r, i, j) {
+    tp <- as.numeric(Tp[i, j] > 0)
+    eta <- eta_base[r] + b_recip * mat[j, i] + b_twop * tp
     for (ei in endo_int) {
       eta <- eta + beta_x[[ei$col]] * ei$static[r] *
         (if (ei$recip) mat[j, i] else 1) *
-        (if (ei$twop) as.numeric(Tp[i, j] > 0) else 1)
+        (if (ei$twop) tp else 1)
     }
-    v <- if (binary) {
+    eta
+  }
+  # write one cell and carry the change statistics; see the two-path
+  # argument below - each toggle is correct given the current B, so
+  # applying it twice (both directions of an undirected pair) is too
+  set_cell <- function(i, j, v) {
+    if (v == mat[i, j]) return(invisible(NULL))
+    mat[i, j] <<- v
+    db <- as.numeric(v != 0) - B[i, j]
+    if (db != 0) {
+      # change statistics: B[i,j] enters Tp[a,b] = sum_k B[a,k] B[k,b]
+      # only as B[i,j]B[j,b] (row i) and B[a,i]B[i,j] (column j); the
+      # updates read row j / column i of B, which do not contain B[i,j],
+      # so their order is immaterial
+      Tp[i, ] <<- Tp[i, ] + db * B[j, ]
+      Tp[, j] <<- Tp[, j] + db * B[, i]
+      B[i, j] <<- B[i, j] + db
+    }
+    invisible(NULL)
+  }
+  draw <- function(eta) {
+    if (binary) {
       stats::rbinom(1, 1, stats::plogis(eta))
     } else {
       nn <- order(abs(yhat_obs - eta))[seq_len(min(donors, length(yhat_obs)))]
       y_obs[nn][sample.int(length(nn), 1)]
     }
-    if (v != mat[i, j]) {
-      mat[i, j] <- v
-      db <- as.numeric(v != 0) - B[i, j]
-      if (db != 0) {
-        # change statistics: B[i,j] enters Tp[a,b] = sum_k B[a,k] B[k,b]
-        # only as B[i,j]B[j,b] (row i) and B[a,i]B[i,j] (column j); the
-        # updates read row j / column i of B, which do not contain B[i,j],
-        # so their order is immaterial
-        Tp[i, ] <- Tp[i, ] + db * B[j, ]
-        Tp[, j] <- Tp[, j] + db * B[, i]
-        B[i, j] <- B[i, j] + db
+  }
+
+  if (undirected) {
+    # An undirected network's two mirror cells are one tie. Drawing them
+    # independently (as the directed sweep does) desymmetrizes the matrix,
+    # which silently reclassifies the network as directed for every derived
+    # measure downstream. Instead each unordered pair is visited once: both
+    # directions' linear predictors are evaluated against the current state,
+    # averaged - on the probability scale for a binary tie, on the linear
+    # predictor scale for a weighted one - and the single resulting draw is
+    # written to both cells.
+    row_of <- matrix(NA_integer_, nrow(mat), ncol(mat))
+    row_of[cbind(d$i, d$j)] <- seq_len(nrow(d))
+    mis <- which(!ry & d$i < d$j)
+    for (r in .shuffle(mis)) {
+      i <- d$i[r]
+      j <- d$j[r]
+      r2 <- row_of[j, i]
+      # the mirror cell is normally missing too (an undirected target has a
+      # symmetric NA pattern by construction). It can still be absent from
+      # the dyad data or already observed when `structural` or a
+      # `net_dependence` mask applies asymmetrically - then this direction
+      # is drawn on its own and the mirror is left untouched.
+      if (is.na(r2) || ry[r2]) {
+        set_cell(i, j, draw(eta_of(r, i, j)))
+        next
       }
+      eta_ij <- eta_of(r, i, j)
+      eta_ji <- eta_of(r2, j, i)
+      v <- if (binary) {
+        p <- (stats::plogis(eta_ij) + stats::plogis(eta_ji)) / 2
+        stats::rbinom(1, 1, p)
+      } else {
+        draw((eta_ij + eta_ji) / 2)
+      }
+      set_cell(i, j, v)
+      set_cell(j, i, v)
+    }
+  } else {
+    for (r in .shuffle(which(!ry))) {
+      i <- d$i[r]
+      j <- d$j[r]
+      set_cell(i, j, draw(eta_of(r, i, j)))
     }
   }
 
@@ -427,6 +578,41 @@ net_diagnostics <- function(mat) {
     stopifnot(isTRUE(all.equal(B, (mat != 0) * 1, check.attributes = FALSE)),
               isTRUE(all.equal(Tp, B %*% B, check.attributes = FALSE)))
   }
+  mat
+}
+
+#' Restore symmetry after a simultaneous tie update
+#'
+#' The simultaneous scheme imputes every missing cell from one snapshot of
+#' the working model, so an undirected network's two mirror cells are drawn
+#' independently and can disagree. Each disagreeing pair is reconciled to a
+#' single value: for a binary network one of the two drawn values is picked
+#' at random (each direction is an equally valid draw of the same tie), for
+#' a weighted network their average is taken.
+#'
+#' A cell that was *observed* is never changed: when only one side of a pair
+#' is imputed, it is set to the observed side's value. Both sides observed
+#' and disagreeing cannot occur, since an undirected target is detected from
+#' a matrix that is symmetric in values and in its NA pattern.
+#' @noRd
+.symmetrize_imputed <- function(mat, ry, binary) {
+  disagree <- which(mat != t(mat) & upper.tri(mat), arr.ind = TRUE)
+  if (!nrow(disagree)) return(mat)
+  i <- disagree[, 1]
+  j <- disagree[, 2]
+  a <- mat[cbind(i, j)]
+  b <- mat[cbind(j, i)]
+  obs_ij <- ry[cbind(i, j)]
+  obs_ji <- ry[cbind(j, i)]
+  v <- if (binary) {
+    ifelse(stats::runif(length(a)) < 0.5, a, b)
+  } else {
+    (a + b) / 2
+  }
+  # an observed side always wins over the imputed one
+  v <- ifelse(obs_ij & !obs_ji, a, ifelse(obs_ji & !obs_ij, b, v))
+  mat[cbind(i, j)] <- v
+  mat[cbind(j, i)] <- v
   mat
 }
 
@@ -613,6 +799,7 @@ net_diagnostics <- function(mat) {
                            net_init,
                            net_update,
                            net_binary,
+                           net_undirected,
                            maxit,
                            printFlag,
                            seed) {
@@ -625,18 +812,24 @@ net_diagnostics <- function(mat) {
   cur_mats <- mats0
   for (nm in net_missing_names) {
     cur_mats[[nm]] <- .init_fill_matrix(cur_mats[[nm]], structural[[nm]],
-                                        init = net_init)
+                                        init = net_init,
+                                        undirected = net_undirected[[nm]])
   }
   # random init fills may violate the network-dependence rules; re-zero the
   # determined cells so every chain starts from a consistent state
   cur_mats <- .enforce_dependence(cur_mats, net_dependence, ry_nets)$mats
 
-  targets <- sample(c(vm_names, net_missing_names))
+  # character vector, so not exposed to the length-1 numeric reinterpretation,
+  # but kept on the same helper so every shuffle in the file reads alike
+  targets <- .shuffle(c(vm_names, net_missing_names))
 
   # igraph views of the current networks, for attribute-visit predictors.
   # Converted once here and refreshed per network right after that network
   # is re-imputed - not rebuilt for every network at every attribute visit.
-  cur_gs <- stats::setNames(lapply(cur_mats, .mat_to_igraph), net_names)
+  cur_gs <- stats::setNames(
+    lapply(net_names, function(nm)
+      .mat_to_igraph(cur_mats[[nm]], directed = !net_undirected[[nm]])),
+    net_names)
 
   net_diag_names <- c("density", "reciprocity", "transitivity", "n_isolates", "avg_inv_geodesic")
   chainMean <- matrix(NA_real_, length(vm_names), maxit,
@@ -646,6 +839,12 @@ net_diagnostics <- function(mat) {
                                        length(net_diag_names), maxit),
                       dimnames = list(net_names, net_diag_names,
                                       seq_len(maxit)))
+  # imputed-cell traces: the undiluted counterpart of netChain, tracked only
+  # for networks that HAVE missing ties (a fully observed one has no imputed
+  # cells and would contribute an all-NaN row)
+  netImpMean <- matrix(NA_real_, length(net_missing_names), maxit,
+                       dimnames = list(net_missing_names, seq_len(maxit)))
+  netImpVar  <- netImpMean
 
   for (it in seq_len(maxit)) {
     if (printFlag) {
@@ -817,7 +1016,8 @@ net_diagnostics <- function(mat) {
                                                 x = x,
                                                 mat = cur_mats[[tgt]],
                                                 binary = net_binary[[tgt]],
-                                                donors = donors)
+                                                donors = donors,
+                                                undirected = net_undirected[[tgt]])
         } else {
           if (length(net_random_intercepts)) {
             imp_vals <- .impute_pmm_ranef(y = y,
@@ -836,15 +1036,24 @@ net_diagnostics <- function(mat) {
           }
           mis_idx <- which(!ry)
           cur_mats[[tgt]][cbind(d$i[mis_idx], d$j[mis_idx])] <- imp_vals
+          if (net_undirected[[tgt]]) {
+            # mirror cells were drawn independently off the same snapshot
+            # and can disagree; reconcile each pair to one tie value
+            cur_mats[[tgt]] <- .symmetrize_imputed(cur_mats[[tgt]],
+                                                   ry_nets[[tgt]],
+                                                   net_binary[[tgt]])
+          }
         }
-        cur_gs[[tgt]] <- .mat_to_igraph(cur_mats[[tgt]])
+        cur_gs[[tgt]] <- .mat_to_igraph(cur_mats[[tgt]],
+                                        directed = !net_undirected[[tgt]])
         # freshly imputed ties may newly determine cells of dependent
         # networks; propagate so the current state always satisfies the rules
         if (!is.null(net_dependence)) {
           enf <- .enforce_dependence(cur_mats, net_dependence, ry_nets)
           cur_mats <- enf$mats
           for (nm2 in enf$changed) {
-            cur_gs[[nm2]] <- .mat_to_igraph(cur_mats[[nm2]])
+            cur_gs[[nm2]] <- .mat_to_igraph(cur_mats[[nm2]],
+                                            directed = !net_undirected[[nm2]])
           }
         }
       }
@@ -859,8 +1068,14 @@ net_diagnostics <- function(mat) {
       chainVar[v, it]  <- stats::var(vals, na.rm = TRUE)
     }
     for (nm in net_names) {
-      dk <- net_diagnostics(cur_mats[[nm]])
+      dk <- net_diagnostics(cur_mats[[nm]],
+                            directed = !net_undirected[[nm]])
       netChain[nm, , it] <- unlist(dk[net_diag_names])
+    }
+    for (nm in net_missing_names) {
+      st <- .imp_tie_stats(cur_mats[[nm]], ry_nets[[nm]], net_undirected[[nm]])
+      netImpMean[nm, it] <- st$mean
+      netImpVar[nm, it]  <- st$var
     }
   }
 
@@ -869,6 +1084,8 @@ net_diagnostics <- function(mat) {
        chainMean = chainMean,
        chainVar = chainVar,
        netChain = netChain,
+       netImpMean = netImpMean,
+       netImpVar = netImpVar,
        visit_order = targets)
 }
 
@@ -996,6 +1213,31 @@ net_diagnostics <- function(mat) {
 #' \emph{Dyad-level term names} below lists every name a network's formula
 #' can reference; the section \emph{Implemented network measures} lists
 #' every measure name an attribute's formula can reference.
+#'
+#' @section Undirected networks:
+#' A network is treated as undirected when its input matrix is symmetric in
+#' both its values and its `NA` pattern, which is exactly the case where
+#' cells (i, j) and (j, i) are two records of one tie. Such a network is
+#' imputed one *tie* at a time and comes back symmetric.
+#'
+#' Under `net_update = "gibbs"` each unordered pair is visited once: both
+#' directions' linear predictors are evaluated against the current state and
+#' averaged - on the probability scale for a binary tie
+#' (`p = (plogis(eta_ij) + plogis(eta_ji)) / 2`), on the linear predictor
+#' scale for a weighted one - and the single draw is written to both cells.
+#' Under `net_update = "simultaneous"` the mirror cells are necessarily drawn
+#' independently from the same snapshot, so disagreeing pairs are reconciled
+#' afterwards: for a binary network one of the two drawn values is kept at
+#' random, for a weighted network their average is taken. Observed cells are
+#' never overwritten by either step.
+#'
+#' This matters beyond tidiness: directedness is detected dynamically with
+#' `isSymmetric()` wherever network measures are computed, so a single
+#' desymmetrized pair would reclassify the network as directed for every
+#' derived predictor in the remaining sweeps, and in the returned object.
+#' If a network is genuinely directed but happens to be symmetric, add an
+#' asymmetric cell or treat the asymmetry as substantive - there is no way
+#' to distinguish the two from the matrix alone.
 #'
 #' @section Dyad-level term names (for a network's `models` formula):
 #' When a network is the imputation target, the working model's rows are its
@@ -1274,7 +1516,13 @@ net_diagnostics <- function(mat) {
 #'   Static predictors (attribute terms, other-network terms, `models`
 #'   extras) are evaluated once per visit and held fixed during the sweep;
 #'   `models` interaction terms involving `reciprocity`/`twopath` are
-#'   refreshed per draw like the main effects. `"simultaneous"`: one PMM
+#'   refreshed per draw like the main effects. For an *undirected* network
+#'   each unordered pair is visited once instead of each cell: both
+#'   directions' linear predictors are evaluated against the current state
+#'   and averaged (on the probability scale for a binary tie, on the linear
+#'   predictor scale for a weighted one), and the single draw is written to
+#'   both cells, so the network stays undirected - see the note below.
+#'   `"simultaneous"`: one PMM
 #'   working model per visit imputes every missing cell at once, all from
 #'   the same snapshot of the endogenous statistics. `net_random_intercepts`
 #'   requires the simultaneous scheme: combining it with an *explicit*
@@ -1315,10 +1563,29 @@ net_diagnostics <- function(mat) {
 #'   `imp_nets` (list of `m` lists of completed adjacency matrices),
 #'   `visit_orders` (the randomized target order used in each chain),
 #'   `chainMean`/`chainVar` (variable x iteration x m arrays of the mean/
-#'   variance of the *imputed* values only, as in `mice`), and `netChain`
+#'   variance of the *imputed* values only, as in `mice`), `netChain`
 #'   (network x diagnostic x iteration x m array from
-#'   \code{\link{net_diagnostics}}). Use \code{\link{complete_netmice}} to
-#'   extract a completed dataset.
+#'   \code{\link{net_diagnostics}}, computed on the **whole completed**
+#'   network), and `netImpMean`/`netImpVar` (network x iteration x m arrays
+#'   over the networks in `net_missing`, holding the mean and variance of the
+#'   **imputed ties only** - the tie-side counterpart of
+#'   `chainMean`/`chainVar`, and the trace to read when judging convergence,
+#'   since `netChain` mixes in the observed ties and is correspondingly
+#'   insensitive when missingness is low). Note that cells fixed
+#'   deterministically by `net_dependence` were missing at input and so count
+#'   as imputed in `netImpMean`/`netImpVar`, though they are not freely drawn.
+#'   Use \code{\link{complete_netmice}} to extract a completed dataset.
+#' @seealso \code{\link{complete_netmice}} to extract a completed
+#'   data.frame/network pair, \code{\link{plot.netmids}} for convergence
+#'   diagnostics and \code{\link{print.netmids}} for a settings summary;
+#'   \code{\link{netquickpred}} to build a per-target predictor selection
+#'   up front; \code{\link{dyad_regression}} for the tie model used at a
+#'   network visit and \code{\link{net_measures}} for the node-level
+#'   measures used at an attribute visit; \code{\link{net_diagnostics}} for
+#'   the per-iteration network statistics.
+#'
+#'   For a worked introduction see
+#'   \code{vignette("netimpute", package = "netimpute")}.
 #' @export
 #'
 #' @examples
@@ -1438,6 +1705,20 @@ netmice <- function(data,
   dep_rules <- .validate_net_dependence(net_dependence, net_names)
   mats0 <- .deduce_from_dependence(mats0, dep_rules)
 
+  # Directedness is established ONCE here, from the incomplete data, and is
+  # then carried to every place that needs it: the tie updater, the
+  # initialisation, the igraph views the attribute predictors are built
+  # from, the per-iteration diagnostics, and netquickpred()'s screening.
+  # It must be read before any cell is filled - isSymmetric() is TRUE only
+  # when the values *and* the NA pattern are symmetric, which is exactly
+  # when cells (i, j) and (j, i) record one tie - because filling destroys
+  # the evidence: a directed network whose asymmetry lies entirely in its
+  # missing cells becomes symmetric once those are zeroed, and anything
+  # re-deriving the flag downstream would misclassify it from then on.
+  net_undirected <- vapply(mats0, function(m) isSymmetric(unname(m)),
+                           logical(1))
+  net_directed <- !net_undirected
+
   attr_types <- .resolve_attr_types(data, attr_types)
 
   model_map <- .parse_models(models)
@@ -1483,7 +1764,8 @@ netmice <- function(data,
                          collin_threshold = collin_threshold,
                          measure_set = measure_set,
                          attr_types = attr_types,
-                         structural = struct_list)
+                         structural = struct_list,
+                         net_directed = net_directed)
     }
   }
 
@@ -1527,6 +1809,8 @@ netmice <- function(data,
       mats0 <- mats0[setdiff(net_names, drop_nets)]
       net_names <- names(mats0)
       if (!is.null(struct_list)) struct_list <- struct_list[net_names]
+      net_undirected <- net_undirected[net_names]
+      net_directed <- net_directed[net_names]
     }
     var_missing <- vapply(data, anyNA, logical(1))
     net_missing <- vapply(mats0, function(mat) anyNA(
@@ -1571,9 +1855,7 @@ netmice <- function(data,
   }
 
   if ("dyad" %in% net_random_intercepts) {
-    undirected <- net_missing_names[vapply(
-      mats0[net_missing_names],
-      function(mat) isSymmetric(unname(mat)), logical(1))]
+    undirected <- net_missing_names[net_undirected[net_missing_names]]
     if (length(undirected)) {
       warning("net_random_intercepts includes 'dyad' but network(s) ",
               toString(undirected),
@@ -1621,6 +1903,7 @@ netmice <- function(data,
       net_init = net_init,
       net_update = net_update,
       net_binary = net_binary,
+      net_undirected = net_undirected,
       maxit = maxit,
       printFlag = printFlag,
       seed = seed
@@ -1662,12 +1945,20 @@ netmice <- function(data,
                                      net_diag_names,
                                      seq_len(maxit),
                                      seq_len(m)))
+  netImpMean <- array(NA_real_, dim = c(length(net_missing_names), maxit, m),
+                      dimnames = list(net_missing_names, seq_len(maxit),
+                                      seq_len(m)))
+  netImpVar <- netImpMean
   for (im in seq_len(m)) {
     if (length(vm_names)) {
       chainMean[, , im] <- chains[[im]]$chainMean
       chainVar[, , im]  <- chains[[im]]$chainVar
     }
     netChain[, , , im] <- chains[[im]]$netChain
+    if (length(net_missing_names)) {
+      netImpMean[, , im] <- chains[[im]]$netImpMean
+      netImpVar[, , im]  <- chains[[im]]$netImpVar
+    }
   }
 
   structure(
@@ -1693,6 +1984,8 @@ netmice <- function(data,
       chainMean = chainMean,
       chainVar = chainVar,
       netChain = netChain,
+      netImpMean = netImpMean,
+      netImpVar = netImpVar,
       var_missing = vm_names,
       net_missing = net_missing_names
     ),
@@ -1705,6 +1998,8 @@ netmice <- function(data,
 #' @param action Which imputation to extract (integer, 1..m).
 #' @return A list with `data` (completed data.frame) and `net_list`
 #'   (completed list of adjacency matrices).
+#' @seealso \code{\link{netmice}} to create the object;
+#'   \code{\link{plot.netmids}} and \code{\link{print.netmids}} to inspect it.
 #' @export
 #'
 #' @examples
@@ -1741,6 +2036,9 @@ complete_netmice <- function(x, action = 1) {
 #' @inheritParams complete_netmice
 #' @param ... Ignored, for consistency with the generic.
 #' @return `x`, invisibly.
+#' @seealso \code{\link{netmice}} to create the object;
+#'   \code{\link{complete_netmice}} to extract a completed dataset;
+#'   \code{\link{plot.netmids}} for convergence diagnostics.
 #' @export
 #'
 #' @examples

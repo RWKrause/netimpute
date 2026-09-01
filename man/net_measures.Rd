@@ -112,3 +112,9 @@ head(net_measures(g, attrs, measure_set = c("core", "total_degree", "pagerank"))
 # a bespoke structural-only selection (no attributes needed)
 head(net_measures(g, measure_set = c("indegree", "betweenness")))
 }
+\seealso{
+\code{\link{net_measures_core}} and \code{\link{net_measures_full}}
+  for the two ready-made measure sets; \code{\link{net_predictors}} to
+  turn measures from several networks into one predictor frame;
+  \code{\link{netmice}}, which computes these as attribute predictors.
+}

@@ -259,3 +259,22 @@ test_that("`targets` with predictor_selection = 'all' drops unneeded
   expect_false("b" %in% names(fit$data))
   expect_false(anyNA(fit$imp[[1]]$y))
 })
+
+test_that("netquickpred: net_directed overrides inference and is validated", {
+  set.seed(9)
+  n <- 12
+  m <- matrix(rbinom(n * n, 1, 0.2), n, n); diag(m) <- 0
+  m[sample(which(row(m) != col(m)), 20)] <- NA
+  attrs <- data.frame(age = rnorm(n), grp = sample(c("a", "b"), n, TRUE))
+  attrs$age[c(2, 5)] <- NA
+
+  expect_s3_class(netquickpred(attrs, list(m = m)), "netquickpred")
+  expect_s3_class(netquickpred(attrs, list(m = m), net_directed = c(m = TRUE)),
+                  "netquickpred")
+  expect_error(netquickpred(attrs, list(m = m), net_directed = c(TRUE)),
+               "named logical vector")
+  expect_error(netquickpred(attrs, list(m = m), net_directed = c(m = NA)),
+               "named logical vector")
+  expect_error(netquickpred(attrs, list(m = m), net_directed = c(other = TRUE)),
+               "named logical vector")
+})

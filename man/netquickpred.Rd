@@ -15,7 +15,8 @@ netquickpred(
   use_missingness = TRUE,
   measure_set = "core",
   attr_types = NULL,
-  structural = NULL
+  structural = NULL,
+  net_directed = NULL
 )
 }
 \arguments{
@@ -58,6 +59,13 @@ predictors for attribute targets, as in \code{\link{net_measures}}
 \item{structural}{Optional structural-zero specification, as in
 \code{\link{netmice}}; structurally absent dyads are excluded from the
 dyad-level screening.}
+
+\item{net_directed}{Optional named logical vector, one entry per network,
+fixing which networks are directed. `NULL` (default) derives it from
+the supplied matrices with `isSymmetric()`, before missing cells are
+zero-filled for screening. Supply it only to keep the classification
+identical to one made elsewhere - \code{\link{netmice}} passes its own
+so that a precomputed selection and the imputation chain agree.}
 }
 \value{
 An object of class `"netquickpred"`: a list with
@@ -156,4 +164,11 @@ attrs$performance[sample(n, 8)] <- NA
 qp <- netquickpred(attrs, list(friends = friends), targets = "happiness")
 qp
 qp$predictors$happiness
+}
+\seealso{
+\code{\link{netmice}}, which accepts the returned object as
+  `predictor_selection`; \code{\link{net_measures}} for the node-level
+  features screened here and \code{\link{dyad_regression}} for the
+  dyad-level terms; \code{\link{print.netquickpred}} for the summary
+  method.
 }

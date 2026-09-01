@@ -156,3 +156,9 @@ attrs <- data.frame(age = rnorm(n, 35, 8), dept = sample(letters[1:3], n, TRUE))
 res <- dyad_regression(list(friends = friends, advice = advice), attrs, target = "friends")
 summary(res$model)
 }
+\seealso{
+\code{\link{netmice}} for the joint imputation loop this
+  dyad-level model is the tie engine of; \code{\link{netquickpred}} to
+  screen its predictor set; \code{\link{net_measures}} for the node-level
+  measures that complement these dyad-level terms.
+}

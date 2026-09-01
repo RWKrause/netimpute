@@ -111,3 +111,9 @@ res <- net_predictors(nets, attrs, measure_set = c("core", "total_degree"),
                        output = "both", keep_vars = c("total_degree"))
 head(res$predictors)
 }
+\seealso{
+\code{\link{net_measures}} for the per-network measures this
+  assembles; \code{\link{netquickpred}} for per-target screening of the
+  result; \code{\link{netmice}}, which builds the same features
+  internally at every visit.
+}

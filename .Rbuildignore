@@ -12,3 +12,5 @@
 ^\.gitattributes$
 ^.*\.Rcheck$
 ^.*\.tar\.gz$
+^doc$
+^Meta$

@@ -36,3 +36,7 @@ str(completed$data)
 anyNA(completed$net_list$friends)
 }
 }
+\seealso{
+\code{\link{netmice}} to create the object;
+  \code{\link{plot.netmids}} and \code{\link{print.netmids}} to inspect it.
+}

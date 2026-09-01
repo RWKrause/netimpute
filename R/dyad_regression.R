@@ -347,6 +347,10 @@
 #'   and `allow.new.levels = TRUE` may be needed if some node never appears
 #'   in an observed dyad). Dyads marked structurally absent via `structural`
 #'   do not appear in `data` at all.
+#' @seealso \code{\link{netmice}} for the joint imputation loop this
+#'   dyad-level model is the tie engine of; \code{\link{netquickpred}} to
+#'   screen its predictor set; \code{\link{net_measures}} for the node-level
+#'   measures that complement these dyad-level terms.
 #' @export
 #'
 #' @examples

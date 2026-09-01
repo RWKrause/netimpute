@@ -4,10 +4,19 @@
 \alias{net_diagnostics}
 \title{Network-level diagnostics tracked across netmice() iterations}
 \usage{
-net_diagnostics(mat)
+net_diagnostics(mat, directed = NULL)
 }
 \arguments{
 \item{mat}{An adjacency matrix (weights, if any, are binarized: `!= 0`).}
+
+\item{directed}{Whether to treat `mat` as directed. `NULL` (default)
+infers it from `mat` with `isSymmetric()`. Pass an explicit value when
+the matrix is a *completed* network whose directedness was established
+from the incomplete data: a symmetric completed matrix is not evidence
+that the network is undirected, and inferring it here would collapse
+in-/out-degree and report reciprocity as 1. \code{\link{netmice}}
+supplies its own up-front classification when tracking these
+diagnostics across iterations.}
 }
 \value{
 A named list: density, reciprocity, transitivity, n_isolates,
@@ -16,8 +25,10 @@ A named list: density, reciprocity, transitivity, n_isolates,
 \description{
 Density, (network-level) reciprocity, global transitivity, isolate count,
 and average inverse geodesic distance (global efficiency). The last is
-computed as the mean of 1/d(i,j) over all ordered pairs i != j; since
-`1/Inf == 0` in R, disconnected pairs (including isolates) contribute 0
+computed as the mean of 1/d(i,j) over all ordered pairs i != j, following
+*directed* paths when the network is directed (so d(i,j) and d(j,i) may
+differ); since `1/Inf == 0` in R, unreachable pairs (including isolates)
+contribute 0
 rather than `NaN`/`Inf` - only the (excluded) diagonal would otherwise
 cause a division by zero.
 }
@@ -26,4 +37,13 @@ set.seed(1)
 m <- matrix(rbinom(400, 1, 0.15), 20, 20)
 diag(m) <- 0
 net_diagnostics(m)
+
+# a symmetric matrix that is nonetheless a directed network
+s <- m * t(m)
+net_diagnostics(s)$reciprocity                    # 1: inferred undirected
+net_diagnostics(s, directed = TRUE)$reciprocity   # 1, but as a directed net
+}
+\seealso{
+\code{\link{netmice}}, which records these per iteration in
+  `netChain`; \code{\link{plot.netmids}} to plot them.
 }

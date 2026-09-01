@@ -63,6 +63,10 @@
 #'   \item{pca_model}{the `prcomp` object, for scree/loadings diagnostics.}
 #'   \item{raw_measures}{the full stacked measures data.frame, for reference.}
 #' }
+#' @seealso \code{\link{net_measures}} for the per-network measures this
+#'   assembles; \code{\link{netquickpred}} for per-target screening of the
+#'   result; \code{\link{netmice}}, which builds the same features
+#'   internally at every visit.
 #' @export
 #'
 #' @examples
