@@ -186,8 +186,10 @@ test_that("imputed-cell traces are more sensitive than the whole-network ones", 
   friends[sample(off, 60)] <- NA            # 60 of 870 dyads = ~7%
   attrs <- data.frame(age = rnorm(n, 35, 8))
   attrs$age[sample(n, 5)] <- NA
-  fit <- netmice(attrs, list(friends = friends), m = 3, maxit = 10,
-                 printFlag = FALSE, seed = 2)
+  # 10 iterations is deliberately short here, so an R-hat warning is expected
+  # and beside the point - this test is about the traces' relative sensitivity
+  fit <- suppressWarnings(netmice(attrs, list(friends = friends), m = 3,
+                                  maxit = 10, printFlag = FALSE, seed = 2))
   whole <- diff(range(fit$netChain["friends", "density", , ]))
   imputed <- diff(range(fit$netImpMean["friends", , ]))
   expect_gt(imputed, 5 * whole)

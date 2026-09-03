@@ -254,7 +254,7 @@ test_that("netmice: net_random_intercepts without an explicit net_update falls b
 test_that("netmice: other_net_predictors = 'pca' runs end to end", {
   fx <- make_missing_fixture()
   fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, other_net_predictors = "pca",
-                  n_components = 2, printFlag = FALSE)
+                  PCA = list(n = 2), printFlag = FALSE)
   expect_s3_class(fit, "netmids")
   off <- which(row(fx$nets$friends) != col(fx$nets$friends))
   expect_false(anyNA(fit$imp_nets[[1]]$friends[off]))
@@ -628,11 +628,18 @@ test_that("netmice: net_random_intercepts = 'dyad' warns for an undirected netwo
   na_cells <- which(is.na(m) & row(m) != col(m))
   undir[na_cells] <- NA
   undir[cbind(col(m)[na_cells], row(m)[na_cells])] <- NA  # keep NAs symmetric
-  expect_warning(
+  # collect every warning: lme4's singular-fit fallback may also fire here
+  # (the PCA budget leaves few predictors for a dyad random intercept), and
+  # that is a documented graceful degradation, not the subject of this test
+  ws <- character(0)
+  withCallingHandlers(
     netmice(fx$attrs, list(friends = undir), m = 1, maxit = 1, printFlag = FALSE,
             net_random_intercepts = "dyad"),
-    "undirected"
-  )
+    warning = function(w) {
+      ws <<- c(ws, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    })
+  expect_true(any(grepl("undirected", ws)))
 })
 
 test_that("netmice: invalid net_random_intercepts values are rejected", {
@@ -644,7 +651,7 @@ test_that("netmice: invalid net_random_intercepts values are rejected", {
   )
 })
 
-test_that("netmice: rejects a signed network in net_list", {
+test_that("netmice: rejects a signed network in `networks`", {
   fx <- make_missing_fixture()
   fx$nets$trust <- fx_signed(n = nrow(fx$attrs))
   expect_error(netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE),
@@ -658,12 +665,12 @@ test_that("netmice: errors when an attribute column and a network share a name",
                "must be distinct")
 })
 
-test_that("complete_netmice: extracts a valid completed (data, net_list) pair", {
+test_that("complete_netmice: extracts a valid completed (data, networks) pair", {
   fx <- make_missing_fixture()
   fit <- netmice(fx$attrs, fx$nets, m = 2, maxit = 1, printFlag = FALSE)
   out <- complete_netmice(fit, 2)
   expect_identical(out$data, fit$imp[[2]])
-  expect_identical(out$net_list, fit$imp_nets[[2]])
+  expect_identical(out$networks, fit$imp_nets[[2]])
   expect_error(complete_netmice(fit, 3), "between 1 and")
 })
 
@@ -703,7 +710,7 @@ test_that("netmice: an undirected binary network is still undirected after imput
     fit <- netmice(fx$attrs, list(u = fx$net), m = 2, maxit = 3, seed = 9,
                    net_update = upd, printFlag = FALSE)
     for (a in seq_len(2)) {
-      out <- complete_netmice(fit, a)$net_list$u
+      out <- complete_netmice(fit, a)$networks$u
       expect_true(isSymmetric(unname(out)),
                   info = paste("net_update =", upd, "imputation", a))
       # observed cells untouched, and the result is a valid binary network
@@ -718,7 +725,7 @@ test_that("netmice: an undirected weighted network is still undirected after imp
   for (upd in c("gibbs", "simultaneous")) {
     fit <- netmice(fx$attrs, list(u = fx$net), m = 1, maxit = 3, seed = 4,
                    net_update = upd, printFlag = FALSE)
-    out <- complete_netmice(fit, 1)$net_list$u
+    out <- complete_netmice(fit, 1)$networks$u
     expect_true(isSymmetric(unname(out)), info = paste("net_update =", upd))
     expect_equal(out[!is.na(fx$net)], fx$net[!is.na(fx$net)])
   }
@@ -728,7 +735,7 @@ test_that("netmice: undirected symmetry survives net_init = 'sample'", {
   fx <- make_undirected_fixture()
   fit <- netmice(fx$attrs, list(u = fx$net), m = 1, maxit = 2, seed = 5,
                  net_init = "sample", printFlag = FALSE)
-  expect_true(isSymmetric(unname(complete_netmice(fit, 1)$net_list$u)))
+  expect_true(isSymmetric(unname(complete_netmice(fit, 1)$networks$u)))
 })
 
 test_that("netmice: undirected handling leaves directed networks asymmetric", {
@@ -736,7 +743,7 @@ test_that("netmice: undirected handling leaves directed networks asymmetric", {
   fx <- make_missing_fixture()
   fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, seed = 3,
                  printFlag = FALSE)
-  expect_false(isSymmetric(unname(complete_netmice(fit, 1)$net_list$friends)))
+  expect_false(isSymmetric(unname(complete_netmice(fit, 1)$networks$friends)))
 })
 
 test_that(".symmetrize_imputed: reconciles disagreeing pairs and spares observed cells", {
@@ -867,7 +874,7 @@ test_that("netmice: runs end to end on a network whose filled state is symmetric
   attrs <- data.frame(age = c(1, NA, 3, 4, NA, 6))
   fit <- netmice(attrs, list(x = m), m = 1, maxit = 2, seed = 1,
                  printFlag = FALSE)
-  out <- complete_netmice(fit, 1)$net_list$x
+  out <- complete_netmice(fit, 1)$networks$x
   obs <- !is.na(m) & (row(m) != col(m))
   expect_equal(out[obs], m[obs])       # observed ties untouched
   expect_false(anyNA(out))
@@ -880,8 +887,9 @@ test_that("netmice: runs end to end on a network whose filled state is symmetric
 
 test_that(".shuffle/.resample: a single element is not reinterpreted as 1:x", {
   expect_identical(netimpute:::.shuffle(29L), 29L)
-  expect_identical(netimpute:::.shuffle(c(3L, 7L))[order(netimpute:::.shuffle(c(3L, 7L)))],
-                   c(3L, 7L))
+  # shuffle ONCE and sort: the earlier form called .shuffle() twice and used
+  # one draw's order() to index the other, so it passed only ~43% of the time
+  expect_identical(sort(netimpute:::.shuffle(c(3L, 7L))), c(3L, 7L))
   expect_length(netimpute:::.shuffle(integer(0)), 0)
   expect_identical(netimpute:::.resample(5, 3), c(5, 5, 5))
   expect_true(all(netimpute:::.resample(c(2, 9), 20) %in% c(2, 9)))
@@ -900,7 +908,7 @@ test_that("netmice: a network with exactly ONE missing tie leaves every observed
   for (upd in c("gibbs", "simultaneous")) {
     fit <- netmice(attrs, list(x = m), m = 1, maxit = 2, seed = 1,
                    net_update = upd, printFlag = FALSE)
-    out <- complete_netmice(fit, 1)$net_list$x
+    out <- complete_netmice(fit, 1)$networks$x
     obs <- !is.na(m) & (row(m) != col(m))
     expect_equal(out[obs], m[obs], info = upd)   # observed ties untouched
     expect_false(anyNA(out))
@@ -918,7 +926,7 @@ test_that("netmice: an undirected network with exactly ONE missing pair is handl
   attrs <- data.frame(age = c(1, NA, 3, 4, NA, 6))
   fit <- netmice(attrs, list(x = m), m = 1, maxit = 2, seed = 1,
                  printFlag = FALSE)
-  out <- complete_netmice(fit, 1)$net_list$x
+  out <- complete_netmice(fit, 1)$networks$x
   obs <- !is.na(m) & (row(m) != col(m))
   expect_equal(out[obs], m[obs])
   expect_true(isSymmetric(unname(out)))

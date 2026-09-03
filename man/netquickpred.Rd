@@ -6,7 +6,7 @@
 \usage{
 netquickpred(
   data,
-  net_list = NULL,
+  networks = NULL,
   targets = NULL,
   mincor = 0.1,
   steps = 3,
@@ -24,7 +24,7 @@ netquickpred(
 Every column is treated as an attribute (remove identifier columns
 first).}
 
-\item{net_list}{Optional (preferably named) list of networks aligned to
+\item{networks}{Optional (preferably named) list of networks aligned to
 `data` (adjacency matrices with `NA` for unknown ties, as in
 \code{\link{netmice}}). When supplied, node-level network measures are
 candidate predictors for attribute targets, and networks with missing

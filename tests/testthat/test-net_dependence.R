@@ -85,7 +85,7 @@ test_that("netmice respects necessary and forbidden rules in every completion", 
 
   expect_identical(fit$net_dependence$necessary, list(c("A", "B")))
   for (im in 1:2) {
-    com <- complete_netmice(fit, im)$net_list
+    com <- complete_netmice(fit, im)$networks
     expect_false(anyNA(com$A)); expect_false(anyNA(com$B)); expect_false(anyNA(com$C))
     # necessary: B ties only where A has a tie
     expect_true(all(com$B[com$A == 0] == 0))
@@ -112,9 +112,9 @@ test_that("net_dependence deductions make deduced cells observed (never re-imput
     list(A = A, B = B), m = 2, maxit = 2,
     net_dependence = list(necessary = list(c("A", "B"))),
     seed = 3, printFlag = FALSE))
-  # the deduced cells are already filled in the stored (pre-chain) net_list
-  expect_true(all(fit$net_list$A[b1] == 1))
+  # the deduced cells are already filled in the stored (pre-chain) networks
+  expect_true(all(fit$networks$A[b1] == 1))
   for (im in 1:2) {
-    expect_true(all(complete_netmice(fit, im)$net_list$A[b1] == 1))
+    expect_true(all(complete_netmice(fit, im)$networks$A[b1] == 1))
   }
 })

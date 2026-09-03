@@ -6,7 +6,9 @@
 \usage{
 netmice(
   data,
-  net_list,
+  networks,
+  edgelist_options = list(),
+  id = NULL,
   m = 5,
   maxit = 20,
   method = "pmm",
@@ -14,7 +16,7 @@ netmice(
   measure_set = "core",
   attr_types = NULL,
   other_net_predictors = c("raw", "pca"),
-  n_components = 3,
+  PCA = list(n = NULL, ratio = 10),
   net_random_intercepts = NULL,
   structural = NULL,
   net_dependence = NULL,
@@ -34,13 +36,54 @@ netmice(
 }
 \arguments{
 \item{data}{A data.frame/tibble of node attributes, `NA` marking missing
-values, rows aligned to the node order of every network in `net_list`.}
+values, rows aligned to the node order of every network in `networks`
+(or matched by name via `id`).}
 
-\item{net_list}{A (preferably named) list of networks, all with the same
-number of nodes and node order as `data`. Supply networks with unknown
-ties as adjacency matrices with `NA` marking those cells (igraph/`network`
-objects are treated as fully observed, since neither format can encode
-an "unknown" tie).}
+\item{networks}{Either a (preferably named) list of networks, all with the
+same number of nodes and node order as `data`, or a single data.frame
+**edgelist** described by `edgelist_options`. Supply networks with
+unknown ties as adjacency matrices with `NA` marking those cells
+(igraph/`network` objects are treated as fully observed, since neither
+format can encode an "unknown" tie).}
+
+\item{edgelist_options}{A list controlling how a data.frame `networks` (or
+`structural`) is read; ignored for the matrix input path. Entries:
+\describe{
+  \item{`edgelist_names`}{Named vector giving the `sender` and
+    `receiver` columns, optionally `value`. When `NULL` the first two
+    columns outside `edgelist_split` are taken as sender/receiver and a
+    third as the value, and that assumption is printed; more than one
+    unexplained extra column is an error.}
+  \item{`edgelist_format`}{`"long"` (default) splits the edgelist by
+    the interaction of the `edgelist_split` columns, giving one network
+    per observed combination, named `<column>_<value>` joined by `_`
+    (e.g. `wave_1_question_2`). `"wide"` makes one network per column
+    named in `edgelist_split`, each numeric and holding that tie's value
+    or `NA`.}
+  \item{`edgelist_split`}{Column name(s) defining the split.}
+  \item{`nodelist`}{Which nodes belong to each network - needed because
+    isolates and wholly missing nodes never appear in an edgelist. A
+    column name in `data`, a vector, or a named list keyed by network,
+    by a single split value (`"wave_1"`), or by a full combination
+    (`"wave_1_question_1"`). When several split values address one
+    network their node sets are **intersected**. A tie whose endpoint is
+    off the resolved roster is an error. Nodes off a network's roster
+    are marked structurally absent in that network.}
+  \item{`missing`}{Node ids whose ties are unknown: a vector (meaning
+    *outgoing* ties, the actor-non-response case), or a list with `out`
+    and/or `in`, addressed per network like `nodelist`. Those rows or
+    columns become `NA` except the cells the edgelist actually lists.}
+  \item{`directed`}{`"directed"`/`"digraph"` or
+    `"undirected"`/`"graph"`, either once for all networks or named per
+    network. Overrides the symmetry-based inference.}
+}}
+
+\item{id}{Optional name of the column of `data` holding node identifiers.
+With matrices it matches their row/column names, reordering them to
+`data`'s rows; when `NULL`, row order is assumed and that is announced.
+With an **edgelist** `id` is required, since node names cannot otherwise
+be resolved to rows. The column is removed from `data` after alignment,
+so it is never treated as an attribute.}
 
 \item{m}{Number of independent imputations (default 5, as in `mice`).}
 
@@ -103,15 +146,31 @@ measures only will typically weaken attribute imputation.}
 
 \item{attr_types}{Optional named attribute-type overrides.}
 
-\item{other_net_predictors, n_components}{Passed to
+\item{other_net_predictors}{Passed to
 \code{\link{dyad_regression}}'s dyad-data builder for the "other
 networks" terms - "raw" (all terms) or "pca" (dyad-level `*_tie`/
 `*_recip` cross-network terms kept raw, node-level degree terms
-reduced to the first `n_components` components). Neither mode ever
+reduced to as many components as `PCA` allows). Neither mode ever
 PCA-transforms the target network's own `reciprocity`/`twopath`
 terms or the cross-network cell terms: those keep their own
 coefficients even when the automatic dimensionality safeguard (see
 Details) collapses the remaining predictors to components.}
+
+\item{PCA}{How many predictors any one imputation model may carry - the
+  single dimensionality safeguard, replacing the former `n_components`
+  argument and the internal 3:1 cap. A list with either or both of:
+  `n`, a fixed maximum number of predictors/components; and `ratio`, the
+  required number of observations per predictor. When both are given the
+  smaller budget wins. The budget is never below 1.
+
+  For a **binary** target - a tie model, or a binary attribute - `ratio`
+  counts *events*, i.e. the rarer of the two outcomes among the observed
+  values, not rows. A logistic model is limited by its rarer class: a
+  30-node network at density 0.15 offers ~870 dyad rows but only ~130
+  ties, and budgeting against the rows would permit enough predictors to
+  separate the data perfectly. Continuous and multinomial targets use the
+  observed row count. The default `ratio = 10` is the conventional
+  events-per-variable floor (Peduzzi et al. 1996; Harrell 2015).}
 
 \item{net_random_intercepts}{`NULL` (default) or a character vector - any
 of `"ego"`, `"alter"`, `"dyad"`. When set, the working model for
@@ -141,7 +200,9 @@ tie updating to `"simultaneous"` (with a message); combining it with an
 explicit `net_update = "gibbs"` is an error.}
 
 \item{structural}{`NULL` (default), one n x n logical matrix, or a named
-list of n x n logical matrices whose names match networks in `net_list`.
+list of n x n logical matrices whose names match networks in
+`networks`, or a data.frame edgelist (read with `edgelist_options`, whose
+`missing` entry is ignored - structural constraints are always known).
 `TRUE` marks a cell whose tie is *structurally absent* - zero by design
 (e.g. a nomination that was impossible by the study design) rather than
 a genuine "no tie" observation. A single matrix applies the same
@@ -286,7 +347,7 @@ identical whether run sequentially or in parallel).}
 order) as in `mice`.}
 }
 \value{
-An object of class `"netmids"` with elements: `data`, `net_list`
+An object of class `"netmids"` with elements: `data`, `networks`
   (original, NA-preserving inputs, except that structurally absent cells
   are fixed at 0 and cells deduced from `net_dependence` are filled),
   `m`, `maxit`, `method` (the resolved per-target method map: one named
@@ -297,7 +358,7 @@ An object of class `"netmids"` with elements: `data`, `net_list`
   `models`, `predictor_selection` (`"all"`, or the `netquickpred` object
   used - inspect it to see each target's selected predictors), `targets`
   (as supplied; when variables were dropped via `targets`, `data`,
-  `net_list`, and the completed datasets contain only the kept
+  `networks`, and the completed datasets contain only the kept
   columns/networks), `imp` (list of `m` completed attribute data.frames),
   `imp_nets` (list of `m` lists of completed adjacency matrices),
   `visit_orders` (the randomized target order used in each chain),

@@ -41,7 +41,8 @@ Imports:
     mice,
     graphics,
     grDevices,
-    stats
+    stats,
+    utils
 Suggests:
     sna,
     network,

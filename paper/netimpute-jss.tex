@@ -235,8 +235,8 @@ the  binary clustering coefficient when all weights equal $1$.
 \code{net\_measures\_full()} across a list of networks (and a matching list
 of attribute data frames), stacks the results, and
 offers three output modes: \code{output = "measures"} returns the stacked
-raw measures. \code{output = "pca"} instead returns the first
-\code{n\_components} principal components of the measure matrix, addressing the multicollinearity that is
+raw measures. \code{output = "pca"} instead returns as many leading principal components of
+the measure matrix as the \code{PCA} budget allows, addressing the multicollinearity that is
 otherwise inevitable once a dozen or more structural and homophily measures
 are computed per network and the inflation of predictors, which can quickly exceed the $N$ in small networks. \code{output = "both"} returns the principal
 components \emph{and} a user-specified set of raw measures
@@ -246,6 +246,27 @@ hypothesised relationship (i.e., a predictor in a regression) the analyst does
 not want diluted by including it
 into a composite component, which can also be resiudalised on the remaining predictors so the
 components capture variance orthogonal to it (\code{residualize\_kept = TRUE}) .
+
+\subsubsection{The predictor budget}
+\label{sec:pca}
+
+How many predictors any single imputation model may carry is governed by one
+argument, \code{PCA}, a list with \code{n} (a fixed ceiling) and/or
+\code{ratio} (observations required per predictor); when both are given the
+smaller budget binds. Whatever the budget, terms that must keep their own
+named coefficient --- a network's own \code{reciprocity} and \code{twopath},
+the cross-network cell terms, the \code{isolate} indicator, and anything named
+in \code{models} --- are exempt, and the budget applies to the remainder.
+
+The denominator of \code{ratio} is deliberately not the row count. For a
+binary target, which includes every tie model, it is the \emph{minority class
+count} among the observed cells. A logistic model is limited by its rarer
+outcome rather than by its sample size: a 30-node network at density $0.15$
+presents roughly $870$ dyadic rows but only about $130$ ties, so budgeting
+against the rows would licence enough predictors to separate the data
+perfectly. The default \code{ratio = 10} is the conventional
+events-per-variable floor \citep{Peduzzi1996,Harrell2015}. Continuous and
+multinomial targets use the observed row count.
 
 \subsection{Dyadic regression}
 \label{sec:dyad}
@@ -498,7 +519,53 @@ class \code{netmids} recording, in parallel to \pkg{mice}'s own convergence
 diagnostics, the mean and variance of each imputed attribute
 value across iterations, and, for every network, its density, reciprocity,
 transitivity, isolate count, and average inverse geodesic distance at every
-iteration.
+iteration. Because those network statistics are computed on the
+\emph{completed} network, observed ties included, they are diluted by the
+missingness fraction and can look flat while the imputed portion drifts; the
+mean and variance of the imputed ties alone are therefore tracked separately
+and are the more sensitive diagnostic.
+
+In addition, \code{netmice()} reports rank-normalized split-$\widehat{R}$
+\citep{GelmanRubin1992,Vehtari2021} for each tracked quantity, computed after
+discarding the first half of the iterations, and warns when any value exceeds
+$1.05$. Constant traces return \code{NA} rather than a spurious statistic.
+Users should note that $\widehat{R}$ is a large-sample diagnostic: at the
+default \code{maxit}, the retained draws per half-chain number in the single
+digits, and the statistic is correspondingly noisy in both directions.
+
+\subsection{Data entry: matrices or an edgelist}
+\label{sec:edgelist}
+
+Adjacency matrices are rarely the form in which network data arrives, so
+\code{networks} also accepts a single data frame \emph{edgelist}, described by
+\code{edgelist\_options}. One edgelist may define many networks:
+\code{edgelist\_format = "long"} splits it on the interaction of the columns
+named in \code{edgelist\_split}, producing one network per observed
+combination (so waves crossed with name-generator questions yield a network
+per wave--question pair), while \code{"wide"} treats each named column as a
+separate network holding that tie's value or \code{NA}.
+
+Because an edgelist carries node names rather than positions, the \code{id}
+argument names the column of \code{data} holding those identifiers; it is
+required for edgelist input and optional, though advisable, for matrices,
+where it matches and reorders their dimnames. Two further options carry the
+information an edgelist structurally cannot. \code{nodelist} supplies each
+network's roster, without which isolates and wholly non-responding actors
+would be invisible; a node off a network's roster is treated as structurally
+absent there rather than as having no ties. \code{missing} names the actors
+whose ties are unknown --- by default their \emph{outgoing} ties, the ordinary
+actor non-response case \citep{huisman2008} --- so that their unlisted cells
+become missing rather than observed zeros. Nodes appearing in the edgelist but
+not in \code{data} are added with all attributes missing, and reported.
+
+The distinction matters because an edgelist records only which ties exist:
+every unlisted cell is a zero by omission, and nothing in the format
+distinguishes ``no tie'' from ``not asked''. \code{netmice()} therefore warns
+when an actor is marked missing in a direction in which the edgelist
+nonetheless lists ties for them, and directs the user to the wide format or to
+matrices, which can express partial observation. The warning is
+direction-matched: an actor whose outgoing ties are missing is still expected
+to appear as a receiver, since others nominated them.
 
 \section{Illustrative example}
 \label{sec:example}
@@ -624,7 +691,7 @@ iteration for every network:
 completed <- complete_netmice(fit, 1)
 head(completed$data)
 anyNA(completed$data)
-anyNA(completed$net_list$friends[row(friends) != col(friends)])
+anyNA(completed$networks$friends[row(friends) != col(friends)])
 round(fit$chainMean["age", , ], 2)
 round(t(fit$netChain["friends", , , 1]), 3)
 \end{Rinput}
@@ -701,6 +768,20 @@ per-target models. However, if the \code{netmice()} call above would be repeated
 with this \code{qp} object, \code{department} would not be dropped, because it
 is part of the predictors in the \code{models} formula for \code{performance}
 and is thus protected.
+
+\subsection{Specifying the imputation models}
+\label{sec:congeniality}
+
+When \code{models} is left unspecified, each imputation model is assembled
+automatically from the available predictors, and \code{netmice()} says once per
+session that supplying \code{models} is preferable. The reason is
+congeniality \citep{Meng1994}: an imputation model must be at least as rich as
+the analysis model that will be fitted to the completed data. Imputing without
+an interaction, a non-linearity, or a network effect that the substantive
+model will estimate draws the imputations from a distribution in which that
+term is absent, biasing the pooled estimate toward the null however large $m$
+is. For missing network data specifically, the consequences of an
+under-specified imputation model have been documented by \citet{Krause2020}.
 
 \section{Discussion and future work}
 \label{sec:discussion}

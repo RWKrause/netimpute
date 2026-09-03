@@ -54,12 +54,14 @@
   if (is.list(structural)) {
     if (is.null(names(structural)) || !all(nzchar(names(structural)))) {
       stop("When `structural` is a list, every element must be named after ",
-           "a network in `net_list`.", call. = FALSE)
+           "a network in `networks`.", call. = FALSE)
     }
     unknown <- setdiff(names(structural), net_names)
     if (length(unknown)) {
-      stop("`structural` names unknown network(s): ",
-           toString(unknown), call. = FALSE)
+      stop("`structural` names unknown network(s): ", toString(unknown),
+           ". When `structural` is an edgelist, its `edgelist_split` must ",
+           "produce the same network names as `networks` does.",
+           call. = FALSE)
     }
     out <- stats::setNames(vector("list", length(net_names)), net_names)
     for (nm in names(structural)) {
@@ -274,14 +276,14 @@
 #'     stay raw.}
 #' }
 #'
-#' @param net_list A (preferably named) list of networks - igraph/`network`
+#' @param networks A (preferably named) list of networks - igraph/`network`
 #'   objects (treated as fully observed) or adjacency matrices (`NA` marks an
 #'   unknown/missing tie). All must have the same number of nodes and node
 #'   order.
 #' @param attributes A data.frame/tibble of node attributes aligned to the
 #'   networks' node order (or matched via `id_col`).
-#' @param target Which network in `net_list` is the response - an index or
-#'   (if `net_list` is named) a name.
+#' @param target Which network in `networks` is the response - an index or
+#'   (if `networks` is named) a name.
 #' @param attr_types Optional named attribute-type overrides, as in
 #'   \code{\link{net_measures_core}}.
 #' @param family Passed to `glm()`; default `"gaussian"`. As the authors of
@@ -295,14 +297,18 @@
 #'   (`*_tie`, `*_recip`) as raw predictors and replaces only the node-level
 #'   degree terms (`*_ego_outdeg`, `*_ego_indeg`, `*_alter_indeg`,
 #'   `*_alter_outdeg`) with the first
-#'   `n_components` principal components, useful when many other networks
+#'   principal components allowed by `PCA`, useful when many other networks
 #'   are supplied. The cross-network cell terms are never absorbed into
 #'   components: the target's `x_ij` being predicted by the other network's
 #'   `y_ij` is a substantive association that should keep its own
 #'   coefficient.
-#' @param n_components Number of PCA components when `other_net_predictors = "pca"`.
+#' @param PCA Predictor budget when `other_net_predictors = "pca"`: a list
+#'   with `n` (a fixed maximum number of components) and/or `ratio` (observed
+#'   rows per predictor, or observed *events* - the rarer of ties/non-ties -
+#'   when the target is binary). The default caps components at 3 as before
+#'   and additionally refuses to exceed a 10:1 budget.
 #' @param structural `NULL` (default), one n x n logical matrix, or a named
-#'   list of n x n logical matrices (names matching networks in `net_list`).
+#'   list of n x n logical matrices (names matching networks in `networks`).
 #'   `TRUE` marks a cell whose tie is *structurally absent* - zero by design
 #'   (e.g. ties into another school class that respondents could not
 #'   nominate) rather than a genuine observation of "no tie". A single matrix
@@ -361,18 +367,20 @@
 #' attrs <- data.frame(age = rnorm(n, 35, 8), dept = sample(letters[1:3], n, TRUE))
 #' res <- dyad_regression(list(friends = friends, advice = advice), attrs, target = "friends")
 #' summary(res$model)
-dyad_regression <- function(net_list,
+dyad_regression <- function(networks,
                             attributes,
                             target,
                             attr_types = NULL,
                             family = "gaussian",
                             other_net_predictors = c("raw", "pca"),
-                            n_components = 3,
+                            PCA = list(n = 3, ratio = 10),
                             structural = NULL,
                             random_intercepts = NULL,
                             id_col = NULL,
                             fit = TRUE) {
+  net_list <- networks   # internal name, kept to avoid churning the body
   other_net_predictors <- match.arg(other_net_predictors)
+  PCA <- .validate_pca(PCA)
   if (!is.null(random_intercepts)) {
     random_intercepts <- match.arg(random_intercepts,
                                    c("ego", "alter", "dyad"),
@@ -386,7 +394,7 @@ dyad_regression <- function(net_list,
 
   target_idx <- if (is.character(target)) match(target, net_names) else target
   if (is.na(target_idx) || length(target_idx) == 0) {
-    stop("`target` not found in `net_list`.", call. = FALSE)
+    stop("`target` not found in `networks`.", call. = FALSE)
   }
 
   struct_list <- .validate_structural(structural, net_names, nrow(mats[[1]]))
@@ -401,8 +409,18 @@ dyad_regression <- function(net_list,
                                         diag = FALSE)
   attributes <- .align_attributes(ref_g, attributes, id_col = id_col)
 
+  # budget from the target's own observed cells: for a binary network the
+  # rarer of ties/non-ties, otherwise the observed row count
+  tgt_mat <- mats[[target_idx]]
+  tgt_struct <- struct_list[[net_names[target_idx]]]
+  obs_mask <- !is.na(tgt_mat) & (row(tgt_mat) != col(tgt_mat))
+  if (!is.null(tgt_struct)) obs_mask <- obs_mask & !tgt_struct
+  tgt_obs <- tgt_mat[obs_mask]
+  n_comp <- .pca_budget(PCA, .pca_denom(
+    tgt_obs, NULL, binary = all(tgt_obs[!is.na(tgt_obs)] %in% c(0, 1))))
+
   built <- .build_dyad_data(mats, attributes, target_idx, attr_types,
-                             other_net_predictors, n_components,
+                             other_net_predictors, n_comp,
                              structural = struct_list[[net_names[target_idx]]])
 
   if (length(random_intercepts)) {

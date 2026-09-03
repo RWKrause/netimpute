@@ -692,9 +692,29 @@ net_diagnostics <- function(mat, directed = NULL) {
   x
 }
 
+#' Warn that a predictor selection is still larger than the PCA budget
+#'
+#' A user who sets `predictor_selection` usually wants named coefficients for
+#' the variables they selected. But the budget applies on top of the
+#' selection, and `PCA$ratio` is counted against observed rows (or events),
+#' which at ordinary network sizes is far smaller than what the `mincor`
+#' screen leaves behind - so the selected variables are silently collapsed
+#' into components anyway. Reported once per call, listing the affected
+#' targets, since a per-visit message would repeat maxit x m times.
 #' @noRd
-.safe_max_cols <- function(n_obs) {
-  max(5, floor(n_obs / 3))
+.pca_selection_notice <- function(entries) {
+  if (!length(entries)) return(invisible(FALSE))
+  txt <- vapply(entries, function(e)
+    paste0(e$target, " (", e$n_in, " selected vs budget ", e$budget, ")"),
+    character(1))
+  message("netimpute: `predictor_selection` still leaves more predictors than ",
+          "the `PCA` budget for: ", paste(txt, collapse = ", "),
+          ". Those models are fitted on principal components, not on the ",
+          "selected variables' own coefficients - selection changed which ",
+          "variables form the components, not whether components are used. ",
+          "Raise `mincor` to select fewer predictors, or widen the budget ",
+          "with a smaller `PCA$ratio` (or an explicit `PCA$n`).")
+  invisible(TRUE)
 }
 
 #' Evaluate one target visit, rethrowing any error with the target's name
@@ -791,7 +811,7 @@ net_diagnostics <- function(mat, directed = NULL) {
                            donors,
                            measure_set,
                            other_net_predictors,
-                           n_components,
+                           PCA,
                            net_random_intercepts,
                            model_map,
                            qp_pred,
@@ -846,6 +866,9 @@ net_diagnostics <- function(mat, directed = NULL) {
                        dimnames = list(net_missing_names, seq_len(maxit)))
   netImpVar  <- netImpMean
 
+  # collected on the first sweep of the first chain only: the numbers are the
+  # same at every visit, and a per-visit message would repeat maxit x m times
+  pca_notice <- list()
   for (it in seq_len(maxit)) {
     if (printFlag) {
       cat(" imputation", im, "- iter", it, "- order:",
@@ -878,18 +901,40 @@ net_diagnostics <- function(mat, directed = NULL) {
                                            exclude = ego_feats,
                                            clash_names = feat_clash_names)
         sel <- if (!is.null(qp_pred)) qp_pred[[v]] else NULL
+        # the isolate flag is the missing-data indicator for the alter-based
+        # features (NA for isolates, mean-filled in .clean_predictor_matrix):
+        # it must keep its own coefficient rather than be absorbed into a
+        # principal component, or the model cannot offset that fill
+        iso_feats <- .isolate_feat_names(net_names, feat_clash_names)
+        # With several networks the same people are typically isolated in all
+        # of them, so these flags are near-copies: protecting every one of
+        # them would spend K parameters on ~1 dimension of signal (five
+        # identical columns are rank 1). Keep a non-redundant subset.
+        if (!is.null(net_feats_df)) {
+          iso_feats <- .dedup_isolate_feats(iso_feats, net_feats_df)
+        }
+        # predictor budget for THIS model: a binary attribute is limited by
+        # its rarer category, anything else by its observed row count
+        v_budget <- .pca_budget(
+          PCA, .pca_denom(cur_data[[v]], ry,
+                          binary = identical(attr_types[[v]], "binary")))
         if (is.null(sel)) {
           # net_feats_df is NULL when every network was dropped via `targets`
           auto_x <- .clean_predictor_matrix(
             cbind(.prep_pca_matrix(other_data),
                   if (!is.null(net_feats_df)) .prep_pca_matrix(net_feats_df)),
-            max_cols = .safe_max_cols(sum(ry)),
-            ry = ry
+            max_cols = v_budget,
+            ry = ry,
+            keep_raw = iso_feats
           )
         } else {
           # netquickpred() selection: only this target's selected attributes
-          # and network features enter the model. The PCA cap stays on as a
-          # rank fallback only (selection normally keeps p well below it).
+          # and network features enter the model. The budget still applies on
+          # top - and often still binds, since `PCA$ratio` is counted against
+          # the observed rows (or events), which at typical network sizes is a
+          # much smaller number than the screen leaves behind. Selection then
+          # changes *which* variables form the components, not whether
+          # components are used; .pca_selection_notice() says so out loud.
           a_cols <- intersect(sel$predictors, names(other_data))
           f_cols <- intersect(sel$net_features, names(net_feats_df))
           parts <- list()
@@ -901,9 +946,14 @@ net_diagnostics <- function(mat, directed = NULL) {
           }
           raw_x <- if (length(parts)) do.call(cbind, parts) else
             matrix(numeric(0), nrow(cur_data), 0)
+          if (im == 1L && it == 1L && ncol(raw_x) > v_budget) {
+            pca_notice[[length(pca_notice) + 1L]] <- list(
+              target = v, n_in = ncol(raw_x), budget = v_budget)
+          }
           auto_x <- .clean_predictor_matrix(raw_x,
-                                            max_cols = .safe_max_cols(sum(ry)),
-                                            ry = ry)
+                                            max_cols = v_budget,
+                                            ry = ry,
+                                            keep_raw = iso_feats)
         }
 
         if (!is.null(model_map[[v]])) {
@@ -965,13 +1015,23 @@ net_diagnostics <- function(mat, directed = NULL) {
         # built raw and then subset by name - the selection replaces the PCA
         # reduction as the dimensionality control.
         sel <- if (!is.null(qp_pred)) qp_pred[[tgt]] else NULL
+        # predictor budget for the tie model. Computed from the observed,
+        # non-structural cells BEFORE the dyad frame is built, since the same
+        # budget caps both the other-network PCA inside it and the design
+        # matrix afterwards. For a binary network this is the number of ties
+        # or non-ties, whichever is rarer - events per variable.
+        obs_mask <- ry_nets[[tgt]]
+        if (!is.null(struct_eff)) obs_mask <- obs_mask & !struct_eff
+        tie_budget <- .pca_budget(
+          PCA, .pca_denom(cur_mats[[tgt]][obs_mask], NULL,
+                          binary = net_binary[[tgt]]))
         built <- .build_dyad_data(cur_mats,
                                   cur_data,
                                   target_idx = k,
                                   attr_types = attr_types,
                                   other_net_predictors = if (is.null(sel))
                                     other_net_predictors else "raw",
-                                  n_components = n_components,
+                                  n_components = tie_budget,
                                   structural = struct_eff)
         d <- built$data
         ry <- ry_nets[[tgt]][cbind(d$i, d$j)]
@@ -989,14 +1049,19 @@ net_diagnostics <- function(mat, directed = NULL) {
                              c("_tie", "_recip")))
         if (is.null(sel)) {
           auto_x <- .clean_predictor_matrix(d[setdiff(names(d), drop_cols)],
-                                             max_cols = .safe_max_cols(sum(ry)),
+                                             max_cols = tie_budget,
                                              ry = ry,
                                              keep_raw = keep_raw)
         } else {
           want <- setdiff(unique(c("reciprocity", "twopath", sel$dyad_terms)),
                           drop_cols)
-          auto_x <- .clean_predictor_matrix(d[intersect(names(d), want)],
-                                             max_cols = .safe_max_cols(sum(ry)),
+          sel_cols <- intersect(names(d), want)
+          if (im == 1L && it == 1L && length(sel_cols) > tie_budget) {
+            pca_notice[[length(pca_notice) + 1L]] <- list(
+              target = tgt, n_in = length(sel_cols), budget = tie_budget)
+          }
+          auto_x <- .clean_predictor_matrix(d[sel_cols],
+                                             max_cols = tie_budget,
                                              ry = ry,
                                              keep_raw = keep_raw)
         }
@@ -1076,6 +1141,9 @@ net_diagnostics <- function(mat, directed = NULL) {
       st <- .imp_tie_stats(cur_mats[[nm]], ry_nets[[nm]], net_undirected[[nm]])
       netImpMean[nm, it] <- st$mean
       netImpVar[nm, it]  <- st$var
+    }
+    if (im == 1L && it == 1L && printFlag) {
+      .pca_selection_notice(pca_notice)
     }
   }
 
@@ -1316,12 +1384,51 @@ net_diagnostics <- function(mat, directed = NULL) {
 #' installed namespace. Use `ncores = 1` (default) during development.
 #'
 #' @param data A data.frame/tibble of node attributes, `NA` marking missing
-#'   values, rows aligned to the node order of every network in `net_list`.
-#' @param net_list A (preferably named) list of networks, all with the same
-#'   number of nodes and node order as `data`. Supply networks with unknown
-#'   ties as adjacency matrices with `NA` marking those cells (igraph/`network`
-#'   objects are treated as fully observed, since neither format can encode
-#'   an "unknown" tie).
+#'   values, rows aligned to the node order of every network in `networks`
+#'   (or matched by name via `id`).
+#' @param networks Either a (preferably named) list of networks, all with the
+#'   same number of nodes and node order as `data`, or a single data.frame
+#'   **edgelist** described by `edgelist_options`. Supply networks with
+#'   unknown ties as adjacency matrices with `NA` marking those cells
+#'   (igraph/`network` objects are treated as fully observed, since neither
+#'   format can encode an "unknown" tie).
+#' @param edgelist_options A list controlling how a data.frame `networks` (or
+#'   `structural`) is read; ignored for the matrix input path. Entries:
+#'   \describe{
+#'     \item{`edgelist_names`}{Named vector giving the `sender` and
+#'       `receiver` columns, optionally `value`. When `NULL` the first two
+#'       columns outside `edgelist_split` are taken as sender/receiver and a
+#'       third as the value, and that assumption is printed; more than one
+#'       unexplained extra column is an error.}
+#'     \item{`edgelist_format`}{`"long"` (default) splits the edgelist by
+#'       the interaction of the `edgelist_split` columns, giving one network
+#'       per observed combination, named `<column>_<value>` joined by `_`
+#'       (e.g. `wave_1_question_2`). `"wide"` makes one network per column
+#'       named in `edgelist_split`, each numeric and holding that tie's value
+#'       or `NA`.}
+#'     \item{`edgelist_split`}{Column name(s) defining the split.}
+#'     \item{`nodelist`}{Which nodes belong to each network - needed because
+#'       isolates and wholly missing nodes never appear in an edgelist. A
+#'       column name in `data`, a vector, or a named list keyed by network,
+#'       by a single split value (`"wave_1"`), or by a full combination
+#'       (`"wave_1_question_1"`). When several split values address one
+#'       network their node sets are **intersected**. A tie whose endpoint is
+#'       off the resolved roster is an error. Nodes off a network's roster
+#'       are marked structurally absent in that network.}
+#'     \item{`missing`}{Node ids whose ties are unknown: a vector (meaning
+#'       *outgoing* ties, the actor-non-response case), or a list with `out`
+#'       and/or `in`, addressed per network like `nodelist`. Those rows or
+#'       columns become `NA` except the cells the edgelist actually lists.}
+#'     \item{`directed`}{`"directed"`/`"digraph"` or
+#'       `"undirected"`/`"graph"`, either once for all networks or named per
+#'       network. Overrides the symmetry-based inference.}
+#'   }
+#' @param id Optional name of the column of `data` holding node identifiers.
+#'   With matrices it matches their row/column names, reordering them to
+#'   `data`'s rows; when `NULL`, row order is assumed and that is announced.
+#'   With an **edgelist** `id` is required, since node names cannot otherwise
+#'   be resolved to rows. The column is removed from `data` after alignment,
+#'   so it is never treated as an attribute.
 #' @param m Number of independent imputations (default 5, as in `mice`).
 #' @param maxit Number of chained-equations iterations per imputation
 #'   (default 20 - higher than `mice`'s own default of 5, since jointly
@@ -1377,15 +1484,30 @@ net_diagnostics <- function(mat, directed = NULL) {
 #'   carry homophily/influence signal; dropping it by selecting structural
 #'   measures only will typically weaken attribute imputation.
 #' @param attr_types Optional named attribute-type overrides.
-#' @param other_net_predictors,n_components Passed to
+#' @param other_net_predictors Passed to
 #'   \code{\link{dyad_regression}}'s dyad-data builder for the "other
 #'   networks" terms - "raw" (all terms) or "pca" (dyad-level `*_tie`/
 #'   `*_recip` cross-network terms kept raw, node-level degree terms
-#'   reduced to the first `n_components` components). Neither mode ever
+#'   reduced to as many components as `PCA` allows). Neither mode ever
 #'   PCA-transforms the target network's own `reciprocity`/`twopath`
 #'   terms or the cross-network cell terms: those keep their own
 #'   coefficients even when the automatic dimensionality safeguard (see
 #'   Details) collapses the remaining predictors to components.
+#' @param PCA How many predictors any one imputation model may carry - the
+#'   single dimensionality safeguard, replacing the former `n_components`
+#'   argument and the internal 3:1 cap. A list with either or both of:
+#'   `n`, a fixed maximum number of predictors/components; and `ratio`, the
+#'   required number of observations per predictor. When both are given the
+#'   smaller budget wins. The budget is never below 1.
+#'
+#'   For a **binary** target - a tie model, or a binary attribute - `ratio`
+#'   counts *events*, i.e. the rarer of the two outcomes among the observed
+#'   values, not rows. A logistic model is limited by its rarer class: a
+#'   30-node network at density 0.15 offers ~870 dyad rows but only ~130
+#'   ties, and budgeting against the rows would permit enough predictors to
+#'   separate the data perfectly. Continuous and multinomial targets use the
+#'   observed row count. The default `ratio = 10` is the conventional
+#'   events-per-variable floor (Peduzzi et al. 1996; Harrell 2015).
 #' @param net_random_intercepts `NULL` (default) or a character vector - any
 #'   of `"ego"`, `"alter"`, `"dyad"`. When set, the working model for
 #'   *network-tie* imputation is a linear mixed model fit with
@@ -1413,7 +1535,9 @@ net_diagnostics <- function(mat, directed = NULL) {
 #'   tie updating to `"simultaneous"` (with a message); combining it with an
 #'   explicit `net_update = "gibbs"` is an error.
 #' @param structural `NULL` (default), one n x n logical matrix, or a named
-#'   list of n x n logical matrices whose names match networks in `net_list`.
+#'   list of n x n logical matrices whose names match networks in
+#'   `networks`, or a data.frame edgelist (read with `edgelist_options`, whose
+#'   `missing` entry is ignored - structural constraints are always known).
 #'   `TRUE` marks a cell whose tie is *structurally absent* - zero by design
 #'   (e.g. a nomination that was impossible by the study design) rather than
 #'   a genuine "no tie" observation. A single matrix applies the same
@@ -1547,7 +1671,7 @@ net_diagnostics <- function(mat, directed = NULL) {
 #' @param printFlag Logical; print progress (imputation/iteration/visit
 #'   order) as in `mice`.
 #'
-#' @return An object of class `"netmids"` with elements: `data`, `net_list`
+#' @return An object of class `"netmids"` with elements: `data`, `networks`
 #'   (original, NA-preserving inputs, except that structurally absent cells
 #'   are fixed at 0 and cells deduced from `net_dependence` are filled),
 #'   `m`, `maxit`, `method` (the resolved per-target method map: one named
@@ -1558,7 +1682,7 @@ net_diagnostics <- function(mat, directed = NULL) {
 #'   `models`, `predictor_selection` (`"all"`, or the `netquickpred` object
 #'   used - inspect it to see each target's selected predictors), `targets`
 #'   (as supplied; when variables were dropped via `targets`, `data`,
-#'   `net_list`, and the completed datasets contain only the kept
+#'   `networks`, and the completed datasets contain only the kept
 #'   columns/networks), `imp` (list of `m` completed attribute data.frames),
 #'   `imp_nets` (list of `m` lists of completed adjacency matrices),
 #'   `visit_orders` (the randomized target order used in each chain),
@@ -1612,14 +1736,16 @@ net_diagnostics <- function(mat, directed = NULL) {
 #' anyNA(completed$data)
 #' }
 netmice <- function(data,
-                    net_list,
+                    networks,
+                    edgelist_options = list(),
+                    id = NULL,
                     m = 5, maxit = 20,
                     method = "pmm",
                     donors = 5,
                     measure_set = "core",
                     attr_types = NULL,
                     other_net_predictors = c("raw", "pca"),
-                    n_components = 3,
+                    PCA = list(n = NULL, ratio = 10),
                     net_random_intercepts = NULL,
                     structural = NULL,
                     net_dependence = NULL,
@@ -1641,6 +1767,7 @@ netmice <- function(data,
   net_update <- match.arg(net_update)
   measure_set <- .resolve_measure_set(measure_set)
   other_net_predictors <- match.arg(other_net_predictors)
+  PCA <- .validate_pca(PCA)
   if (!is.null(net_random_intercepts)) {
     net_random_intercepts <- match.arg(net_random_intercepts,
                                        c("ego", "alter", "dyad"),
@@ -1663,14 +1790,98 @@ netmice <- function(data,
   }
 
   data <- as.data.frame(data)
-  n <- nrow(data)
-  var_names <- names(data)
+  el_directed <- NULL
+  el_structural <- NULL
+
+  if (is.data.frame(networks)) {
+    # edgelist input: build the aligned matrices (and possibly extend `data`
+    # with nodes the edgelist knows about) before anything else runs
+    conv <- .networks_from_edgelist(networks, edgelist_options, data, id,
+                                    printFlag = printFlag)
+    net_list <- conv$mats
+    data <- conv$data
+    el_directed <- conv$directed
+    el_structural <- conv$structural
+  } else {
+    if (!is.list(networks)) {
+      stop("`networks` must be a list of networks, or a data.frame edgelist.",
+           call. = FALSE)
+    }
+    if (length(edgelist_options)) {
+      message("netimpute: `edgelist_options` is ignored - `networks` is a ",
+              "list of networks, not an edgelist.")
+    }
+    net_list <- networks
+  }
 
   net_names <- names(net_list)
   if (is.null(net_names)) {
     net_names <- paste0("net", seq_along(net_list))
     names(net_list) <- net_names
   }
+
+  # A `structural` edgelist must be converted HERE, while `data` still carries
+  # the id column and already has any nodes the networks edgelist added -
+  # after the id is stripped below there is nothing left to resolve names
+  # against.
+  if (is.data.frame(structural)) {
+    sc <- .networks_from_edgelist(structural, edgelist_options, data, id,
+                                  printFlag = printFlag,
+                                  what = "`structural`",
+                                  allow_missing = FALSE)
+    if (nrow(sc$data) != nrow(data)) {
+      stop("The `structural` edgelist refers to node(s) that are not in ",
+           "`data` or in `networks`. Structural constraints can only be ",
+           "placed on nodes that exist.", call. = FALSE)
+    }
+    structural <- lapply(sc$mats, function(m) unname(m) != 0)
+  }
+
+  # `id` aligns network rows/columns to the rows of `data` by name. Without
+  # it, positional alignment is assumed - the single most likely way to get
+  # silently wrong results, so it is always announced.
+  if (!is.null(id)) {
+    if (!id %in% names(data)) {
+      stop("`id` column '", id, "' not found in `data`.", call. = FALSE)
+    }
+    ids <- as.character(data[[id]])
+    if (anyDuplicated(ids)) {
+      stop("`id` column '", id, "' has duplicate values; node identifiers ",
+           "must be unique.", call. = FALSE)
+    }
+    net_list <- lapply(stats::setNames(net_names, net_names), function(nm) {
+      m <- .as_matrix_generic(net_list[[nm]])
+      rn <- rownames(m)
+      cn <- colnames(m)
+      if (is.null(rn) || is.null(cn)) {
+        stop("`id` was supplied, but network '", nm, "' has no row/column ",
+             "names to match against. Give it dimnames, or drop `id` to ",
+             "align by row order.", call. = FALSE)
+      }
+      if (!setequal(rn, ids) || !setequal(cn, ids)) {
+        extra <- setdiff(unique(c(rn, cn)), ids)
+        absent <- setdiff(ids, unique(c(rn, cn)))
+        stop("Network '", nm, "' does not carry the same nodes as `data`'s ",
+             "`id` column",
+             if (length(extra)) paste0("; in the network but not in `data`: ",
+                                        toString(utils::head(extra, 5))),
+             if (length(absent)) paste0("; in `data` but not in the network: ",
+                                        toString(utils::head(absent, 5))),
+             ".", call. = FALSE)
+      }
+      m[match(ids, rn), match(ids, cn), drop = FALSE]
+    })
+    # the identifier has served its purpose; leaving it in `data` would have
+    # every downstream consumer treat it as an n-level multinomial attribute
+    data <- data[, setdiff(names(data), id), drop = FALSE]
+  } else if (printFlag) {
+    message("netimpute: `id` is not set, so the rows and columns of every ",
+            "network are assumed to be in the same order as the rows of ",
+            "`data`. Supply `id` to match by name instead.")
+  }
+
+  n <- nrow(data)
+  var_names <- names(data)
 
   name_clash <- intersect(var_names, net_names)
   if (length(name_clash)) {
@@ -1696,6 +1907,20 @@ netmice <- function(data,
   # (never missing, never imputed) and only need special handling where the
   # dyad-level regression rows are built
   struct_list <- .validate_structural(structural, net_names, n)
+  # off-roster cells from the edgelist are structural too: a node the
+  # nodelist excludes from a network could not have had ties there
+  if (!is.null(el_structural)) {
+    if (is.null(struct_list)) {
+      struct_list <- stats::setNames(vector("list", length(net_names)),
+                                     net_names)
+    }
+    for (nm in names(el_structural)) {
+      if (is.null(el_structural[[nm]])) next
+      es <- unname(el_structural[[nm]])
+      struct_list[[nm]] <- if (is.null(struct_list[[nm]])) es else
+        (struct_list[[nm]] | es)
+    }
+  }
   mats0 <- .apply_structural_zeros(mats0, struct_list)
 
   # adaptive structural constraints between networks: validate the rules,
@@ -1717,11 +1942,40 @@ netmice <- function(data,
   # re-deriving the flag downstream would misclassify it from then on.
   net_undirected <- vapply(mats0, function(m) isSymmetric(unname(m)),
                            logical(1))
+  # an explicit `edgelist_options$directed` overrides the inference: a
+  # symmetric matrix is not proof of an undirected network, and only the user
+  # knows which it is
+  if (!is.null(el_directed)) {
+    declared <- el_directed[intersect(names(el_directed), net_names)]
+    declared <- declared[!is.na(declared)]
+    if (length(declared)) {
+      net_undirected[names(declared)] <- !declared
+    }
+  }
   net_directed <- !net_undirected
 
   attr_types <- .resolve_attr_types(data, attr_types)
 
   model_map <- .parse_models(models)
+  if (is.null(models) && printFlag) {
+    # Congeniality: an imputation model that omits terms carried by the
+    # analysis model (interactions, non-linearities, the network effects the
+    # substantive question is about) biases the pooled estimates toward the
+    # null, and no amount of m fixes it. Said once per session, since the
+    # advice does not change between calls.
+    .notify_once(
+      "models_null",
+      "netimpute: `models` is NULL, so every imputation model is built ",
+      "automatically from the available predictors. Supplying `models` is ",
+      "recommended: an imputation model should be at least as rich as the ",
+      "analysis model you intend to fit - one that omits its interactions ",
+      "or non-linearities biases the pooled estimates toward the null ",
+      "(the congeniality requirement; Meng, 1994, Statistical Science 9(4), ",
+      "538-558). For the network case see Krause, Huisman, Steglich & ",
+      "Snijders (2020, Social Networks 62, 99-112). ",
+      "This note is shown once per session; `printFlag = FALSE` silences it."
+    )
+  }
   bad_models <- setdiff(names(model_map), c(var_names, net_names))
   if (length(bad_models)) {
     stop("`models` references unknown variable/network(s): ",
@@ -1895,7 +2149,7 @@ netmice <- function(data,
       donors = donors,
       measure_set = measure_set,
       other_net_predictors = other_net_predictors,
-      n_components = n_components,
+      PCA = PCA,
       net_random_intercepts = net_random_intercepts,
       model_map = model_map,
       qp_pred = if (!is.null(qp)) qp$predictors else NULL,
@@ -1961,10 +2215,10 @@ netmice <- function(data,
     }
   }
 
-  structure(
+  out <- structure(
     list(
       data = data,
-      net_list = mats0,
+      networks = mats0,
       m = m,
       maxit = maxit,
       method = method,
@@ -1977,6 +2231,7 @@ netmice <- function(data,
       targets = targets,
       net_init = net_init,
       net_update = net_update,
+      PCA = PCA,
       ncores = ncores,
       imp = imp_data,
       imp_nets = imp_nets,
@@ -1991,12 +2246,28 @@ netmice <- function(data,
     ),
     class = "netmids"
   )
+
+  # Convergence check on the finished chains. R-hat compares between- and
+  # within-chain variance after discarding the first half of the iterations;
+  # anything above 1.05 means the chains have not settled on a common
+  # distribution and `maxit` is too small.
+  out$rhat <- .netmids_rhat(out)
+  .warn_rhat(out$rhat, maxit)
+  n_post <- maxit - floor(maxit * 0.5)
+  if (printFlag && n_post < 40 && any(is.finite(out$rhat))) {
+    message("netimpute: R-hat was computed from ", n_post, " post-burn-in ",
+            "iteration(s) per chain, which split-R-hat halves again. That is ",
+            "few enough that the statistic is noisy in both directions - ",
+            "treat it as a rough screen, and prefer a larger `maxit` before ",
+            "reading much into a value near the 1.05 threshold.")
+  }
+  out
 }
 
 #' Extract one completed data.frame/network-list from a netmids object
 #' @param x A `netmids` object from \code{\link{netmice}}.
 #' @param action Which imputation to extract (integer, 1..m).
-#' @return A list with `data` (completed data.frame) and `net_list`
+#' @return A list with `data` (completed data.frame) and `networks`
 #'   (completed list of adjacency matrices).
 #' @seealso \code{\link{netmice}} to create the object;
 #'   \code{\link{plot.netmids}} and \code{\link{print.netmids}} to inspect it.
@@ -2022,7 +2293,7 @@ netmice <- function(data,
 complete_netmice <- function(x, action = 1) {
   if (!inherits(x, "netmids")) stop("`x` must be a netmids object from netmice().", call. = FALSE)
   if (action < 1 || action > x$m) stop("`action` must be between 1 and ", x$m, ".", call. = FALSE)
-  list(data = x$imp[[action]], net_list = x$imp_nets[[action]])
+  list(data = x$imp[[action]], networks = x$imp_nets[[action]])
 }
 
 #' Print a summary of a netmids object
@@ -2085,6 +2356,22 @@ print.netmids <- function(x, ...) {
   }
   if (length(x$models)) {
     cat("Custom models for:", toString(names(x$models)), "\n")
+  }
+  if (length(x$rhat)) {
+    rh <- x$rhat[is.finite(x$rhat)]
+    if (!length(rh)) {
+      cat("Convergence (R-hat): not computable",
+          "(constant traces or too few iterations)
+")
+    } else {
+      worst <- rh[which.max(rh)]
+      bad <- sum(rh > 1.05)
+      cat("Convergence (R-hat): max", format(round(max(rh), 3), nsmall = 3),
+          paste0("(", names(worst), ")"),
+          "-", if (bad) paste(bad, "above 1.05 - increase maxit") else
+            "all below 1.05", "
+")
+    }
   }
   if (inherits(x$predictor_selection, "netquickpred")) {
     qp <- x$predictor_selection

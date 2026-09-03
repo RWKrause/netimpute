@@ -5,13 +5,13 @@
 \title{Dyadic (cell-level) regression on a vectorized adjacency matrix}
 \usage{
 dyad_regression(
-  net_list,
+  networks,
   attributes,
   target,
   attr_types = NULL,
   family = "gaussian",
   other_net_predictors = c("raw", "pca"),
-  n_components = 3,
+  PCA = list(n = 3, ratio = 10),
   structural = NULL,
   random_intercepts = NULL,
   id_col = NULL,
@@ -19,7 +19,7 @@ dyad_regression(
 )
 }
 \arguments{
-\item{net_list}{A (preferably named) list of networks - igraph/`network`
+\item{networks}{A (preferably named) list of networks - igraph/`network`
 objects (treated as fully observed) or adjacency matrices (`NA` marks an
 unknown/missing tie). All must have the same number of nodes and node
 order.}
@@ -27,8 +27,8 @@ order.}
 \item{attributes}{A data.frame/tibble of node attributes aligned to the
 networks' node order (or matched via `id_col`).}
 
-\item{target}{Which network in `net_list` is the response - an index or
-(if `net_list` is named) a name.}
+\item{target}{Which network in `networks` is the response - an index or
+(if `networks` is named) a name.}
 
 \item{attr_types}{Optional named attribute-type overrides, as in
 \code{\link{net_measures_core}}.}
@@ -45,16 +45,20 @@ other network; "pca" keeps the dyad-level cross-network terms
 (`*_tie`, `*_recip`) as raw predictors and replaces only the node-level
 degree terms (`*_ego_outdeg`, `*_ego_indeg`, `*_alter_indeg`,
 `*_alter_outdeg`) with the first
-`n_components` principal components, useful when many other networks
+principal components allowed by `PCA`, useful when many other networks
 are supplied. The cross-network cell terms are never absorbed into
 components: the target's `x_ij` being predicted by the other network's
 `y_ij` is a substantive association that should keep its own
 coefficient.}
 
-\item{n_components}{Number of PCA components when `other_net_predictors = "pca"`.}
+\item{PCA}{Predictor budget when `other_net_predictors = "pca"`: a list
+with `n` (a fixed maximum number of components) and/or `ratio` (observed
+rows per predictor, or observed *events* - the rarer of ties/non-ties -
+when the target is binary). The default caps components at 3 as before
+and additionally refuses to exceed a 10:1 budget.}
 
 \item{structural}{`NULL` (default), one n x n logical matrix, or a named
-list of n x n logical matrices (names matching networks in `net_list`).
+list of n x n logical matrices (names matching networks in `networks`).
 `TRUE` marks a cell whose tie is *structurally absent* - zero by design
 (e.g. ties into another school class that respondents could not
 nominate) rather than a genuine observation of "no tie". A single matrix

@@ -12,7 +12,7 @@ complete_netmice(x, action = 1)
 \item{action}{Which imputation to extract (integer, 1..m).}
 }
 \value{
-A list with `data` (completed data.frame) and `net_list`
+A list with `data` (completed data.frame) and `networks`
   (completed list of adjacency matrices).
 }
 \description{

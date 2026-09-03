@@ -1,6 +1,87 @@
 # netimpute (development version)
 
+## Breaking changes
+
+* **`netmice()`'s `net_list` argument is now called `networks`**, and the same
+  rename applies to `dyad_regression()`, `net_predictors()` and
+  `netquickpred()`. The fitted object's `$net_list` element and
+  `complete_netmice()`'s `$net_list` are now `$networks`. There is no
+  deprecated alias: existing scripts that pass `net_list =` by name, or read
+  `fit$net_list`, must be updated.
+
+* **`n_components` is replaced by `PCA`**, a list with `n` (a fixed maximum
+  number of predictors/components) and/or `ratio` (observations per
+  predictor); the smaller budget wins. This is now the *single* dimensionality
+  safeguard - it also replaces the internal `max(5, n/3)` cap that previously
+  limited every imputation model.
+
+  The default is `PCA = list(n = NULL, ratio = 10)`. For a **binary** target -
+  any tie model, or a binary attribute - `ratio` counts *events*, the rarer of
+  the two outcomes among the observed values, rather than rows. A logistic
+  model is limited by its rarer class: a 30-node network at density 0.15 has
+  ~870 dyad rows but only ~130 ties, and budgeting against the rows would
+  permit enough predictors to separate the data perfectly. `ratio = 10` is the
+  conventional events-per-variable floor (Peduzzi et al. 1996; Harrell 2015).
+
+  **Imputed values change** as a result: models that previously carried up to
+  `n/3` predictors now typically carry fewer, and mixed-model fits that were
+  borderline may now fall back to standard PMM.
+
 ## New features
+
+* **Networks may be supplied as an edgelist.** `networks` accepts a data.frame
+  instead of a list of matrices, described by the new `edgelist_options`
+  argument (`edgelist_names`, `edgelist_format`, `edgelist_split`, `nodelist`,
+  `missing`, `directed`). One edgelist can be split into many networks -
+  `edgelist_format = "long"` splits on the interaction of the `edgelist_split`
+  columns, `"wide"` makes one network per named column. `structural` accepts
+  an edgelist too (its `missing` entry is ignored, since structural
+  constraints are always known). See `vignette("netimpute")`.
+
+* **New `id` argument** naming the column of `data` that holds node
+  identifiers. With matrices it matches and reorders their row/column names;
+  with an edgelist it is required, since node names cannot otherwise be
+  resolved to rows. When it is `NULL`, positional alignment is assumed and
+  said so out loud. The column is dropped from `data` after alignment, so it
+  is never treated as an attribute.
+
+* **R-hat convergence diagnostic.** `netmice()` now computes rank-normalized
+  split-R-hat for every tracked quantity (attribute means and variances, the
+  network diagnostics, and the imputed-tie traces), after discarding the first
+  half of the iterations. It is stored on the fitted object as `$rhat`,
+  reported by `print()`, and any value above 1.05 raises a warning naming the
+  offending quantities and suggesting a larger `maxit`. Implemented inline -
+  no new dependency - and verified to match `rstan::Rhat()` to ten decimal
+  places. Constant traces (e.g. an isolate count that never moves) give `NA`
+  rather than a spurious number.
+
+* **The `isolate` flag is now always retained** whenever alter-based features
+  are in play. Those features are `NA` for a node with no alters and are
+  mean-filled downstream, which silently hands an isolate the *average
+  neighbourhood of the connected nodes*; the flag is the missing-data
+  indicator that lets a model offset that fill, so it now bypasses
+  `netquickpred()`'s screening and is never absorbed into a principal
+  component. A constant flag (no isolates, or nothing but isolates) is still
+  dropped, since it offsets nothing.
+
+  With several networks the flags are kept from multiplying. A network's flag
+  is force-kept only when at least one alter-based feature from *that* network
+  entered the model - offsetting that network's mean-fill is the flag's whole
+  purpose - and near-duplicate flags prune each other, since the same people
+  are typically isolated in every network. (Five identical flags are rank 1
+  and would spend four parameters on nothing; they remain exempt from being
+  pruned by ordinary predictors.) Exactly-duplicated flags are dropped even
+  when `collin_method = "none"`.
+
+* **`netmice()` now reports when a `predictor_selection` is still larger than
+  the `PCA` budget**, once per call, naming the affected targets. The budget
+  applies on top of the selection and at ordinary network sizes usually still
+  binds, so a user who selected predictors expecting named coefficients would
+  otherwise silently get principal components instead.
+
+* **`netmice()` now recommends supplying `models`** when it is `NULL`, once
+  per session, citing the congeniality requirement (Meng 1994) and, for the
+  network case, Krause et al. (2020). `printFlag = FALSE` silences it.
 
 * `netmice()` now also tracks the mean and variance of the **imputed ties
   only**, per network per iteration, in `netImpMean`/`netImpVar` — the tie-side

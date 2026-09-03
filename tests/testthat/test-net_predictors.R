@@ -40,8 +40,8 @@ test_that("net_predictors: use_sna is passed through for measure_set = 'full'", 
   expect_true(all(is.na(out_no_sna$gilschmidt)))
 })
 
-test_that("net_predictors: output = 'pca' returns n_components PCs and a prcomp model", {
-  res <- net_predictors(pooled_nets, pooled_attrs, output = "pca", n_components = 4)
+test_that("net_predictors: output = 'pca' returns PCA$n PCs and a prcomp model", {
+  res <- net_predictors(pooled_nets, pooled_attrs, output = "pca", PCA = list(n = 4))
   expect_type(res, "list")
   expect_true(all(c("predictors", "pca_model", "raw_measures") %in% names(res)))
   expect_s3_class(res$pca_model, "prcomp")
@@ -49,8 +49,8 @@ test_that("net_predictors: output = 'pca' returns n_components PCs and a prcomp 
   expect_equal(nrow(res$predictors), nrow(res$raw_measures))
 })
 
-test_that("net_predictors: n_components is capped at the available column count", {
-  res <- net_predictors(pooled_nets, pooled_attrs, output = "pca", n_components = 9999)
+test_that("net_predictors: the component count is capped at the available columns", {
+  res <- net_predictors(pooled_nets, pooled_attrs, output = "pca", PCA = list(n = 9999))
   expect_lt(sum(grepl("^PC", names(res$predictors))), 9999)
 })
 
@@ -58,7 +58,7 @@ test_that("net_predictors: output = 'both' requires keep_vars and preserves them
   expect_error(net_predictors(pooled_nets, pooled_attrs, output = "both"),
                "keep_vars")
   res <- net_predictors(pooled_nets, pooled_attrs, output = "both",
-                         keep_vars = c("total_degree"), measure_set = "full", n_components = 3)
+                         keep_vars = c("total_degree"), measure_set = "full", PCA = list(n = 3))
   expect_true("total_degree" %in% names(res$predictors))
   expect_equal(sum(grepl("^PC", names(res$predictors))), 3)
   expect_equal(res$predictors$total_degree, res$raw_measures$total_degree)
@@ -66,10 +66,10 @@ test_that("net_predictors: output = 'both' requires keep_vars and preserves them
 
 test_that("net_predictors: residualize_kept changes the PCA input relative to plain exclusion", {
   res_plain <- net_predictors(pooled_nets, pooled_attrs, output = "both", measure_set = "full",
-                               keep_vars = c("total_degree"), n_components = 3,
+                               keep_vars = c("total_degree"), PCA = list(n = 3),
                                residualize_kept = FALSE)
   res_resid <- net_predictors(pooled_nets, pooled_attrs, output = "both", measure_set = "full",
-                               keep_vars = c("total_degree"), n_components = 3,
+                               keep_vars = c("total_degree"), PCA = list(n = 3),
                                residualize_kept = TRUE)
   expect_false(isTRUE(all.equal(res_plain$pca_model$rotation, res_resid$pca_model$rotation)))
 })
@@ -95,7 +95,7 @@ test_that("net_predictors: id_col is passed through to the per-network measure c
   expect_equal(out$outdegree, out_ref$outdegree)
 })
 
-test_that("net_predictors: errors on mismatched net_list/attr_list length", {
+test_that("net_predictors: errors on mismatched networks/attr_list length", {
   expect_error(net_predictors(pooled_nets, pooled_attrs[1:2], output = "measures"),
                "same length")
 })

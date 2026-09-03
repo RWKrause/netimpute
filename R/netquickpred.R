@@ -25,6 +25,62 @@
   ifelse(raw %in% clash_names, paste0(net_name, "_", raw), raw)
 }
 
+#' The `isolate` feature name(s) under netmice()'s naming convention
+#'
+#' The missing-data indicator for the alter-based features: NA for isolates,
+#' mean-filled downstream. Must be protected from PCA absorption and from
+#' predictor selection wherever those features are used, so every consumer
+#' needs the same names .net_feature_frame() produces.
+#' @noRd
+.isolate_feat_names <- function(net_names, clash_names) {
+  if (!length(net_names)) return(character(0))
+  .qp_prefix(rep("isolate", length(net_names)), net_names,
+             multi = length(net_names) > 1, clash_names = clash_names)
+}
+
+#' Reduce near-duplicate isolate flags to a non-redundant subset
+#'
+#' With several networks the same people are usually isolated in all of them,
+#' so the per-network flags are near-copies of one another: five identical
+#' columns are rank 1 and waste four parameters. They stay exempt from being
+#' pruned by ordinary predictors, but they must be allowed to prune *each
+#' other* - a pair at r = 0.95 would be pruned for any other predictor.
+#'
+#' @param feat_names Isolate feature names to reduce.
+#' @param df Data frame holding those columns.
+#' @param threshold Absolute-correlation threshold above which one of a pair
+#'   is dropped.
+#' @param relevance Optional named vector; the more relevant of a pair
+#'   survives. Without it the earlier one does, which is network order.
+#' @noRd
+.dedup_isolate_feats <- function(feat_names, df, threshold = 0.9,
+                                 relevance = NULL) {
+  feat_names <- intersect(feat_names, names(df))
+  if (length(feat_names) < 2) return(feat_names)
+  m <- vapply(df[feat_names], as.numeric, numeric(nrow(df)))
+  keep <- feat_names
+  repeat {
+    if (length(keep) < 2) break
+    cm <- abs(suppressWarnings(stats::cor(m[, keep, drop = FALSE])))
+    cm[!is.finite(cm)] <- 0
+    diag(cm) <- 0
+    mx <- max(cm)
+    if (mx <= threshold) break
+    idx <- which(cm == mx, arr.ind = TRUE)[1, ]
+    a <- keep[idx[1]]
+    b <- keep[idx[2]]
+    drop_u <- if (is.null(relevance) || is.na(relevance[[a]]) ||
+                  is.na(relevance[[b]]) ||
+                  relevance[[a]] == relevance[[b]]) {
+      # tie (identical columns, typically): keep the earlier network's flag,
+      # so the survivor is predictable rather than an artefact of scan order
+      keep[max(idx)]
+    } else if (relevance[[a]] > relevance[[b]]) b else a
+    keep <- setdiff(keep, drop_u)
+  }
+  keep
+}
+
 #' The homophily-block column names net_measures() produces for one attribute
 #' (unprefixed), by attribute type - must mirror .homophily_block()
 #' @noRd
@@ -35,6 +91,20 @@
   } else {
     paste0(nm, "_", c("ei_index", "blau_index", "alter_mode"))
   }
+}
+
+#' Guarantee the `isolate` flag accompanies the alter-based features
+#'
+#' The homophily block is NA for a node with no alters, and
+#' .clean_predictor_matrix() fills those with the column mean - i.e. an
+#' isolate is handed the AVERAGE NEIGHBOURHOOD of the connected nodes. The
+#' `isolate` flag is the missing-data indicator that lets a model offset that
+#' fill, so it is always computed whenever alter-based features are. Every
+#' consumer must apply this to `measure_set` identically, or the feature
+#' frame and the source maps built from `measure_set` disagree.
+#' @noRd
+.with_isolate <- function(measure_set) {
+  if ("homophily" %in% measure_set) union(measure_set, "isolate") else measure_set
 }
 
 #' Node-level network-feature frame across all networks, with netmice()'s
@@ -51,6 +121,7 @@
 .net_feature_frame <- function(gs, data, measure_set, attr_types, net_names,
                                exclude = character(0),
                                clash_names = names(data)) {
+  measure_set <- .with_isolate(measure_set)
   lst <- lapply(seq_along(gs), function(k) {
     out <- net_measures(gs[[k]], data, measure_set = measure_set,
                         attr_types = attr_types)
@@ -288,7 +359,7 @@
 #' @param data A data.frame of node attributes, `NA` marking missing values.
 #'   Every column is treated as an attribute (remove identifier columns
 #'   first).
-#' @param net_list Optional (preferably named) list of networks aligned to
+#' @param networks Optional (preferably named) list of networks aligned to
 #'   `data` (adjacency matrices with `NA` for unknown ties, as in
 #'   \code{\link{netmice}}). When supplied, node-level network measures are
 #'   candidate predictors for attribute targets, and networks with missing
@@ -357,7 +428,7 @@
 #' qp
 #' qp$predictors$happiness
 netquickpred <- function(data,
-                         net_list = NULL,
+                         networks = NULL,
                          targets = NULL,
                          mincor = 0.1,
                          steps = 3,
@@ -379,7 +450,8 @@ netquickpred <- function(data,
   if (!is.numeric(steps) || length(steps) != 1 || steps < 1) {
     stop("`steps` must be a single integer >= 1.", call. = FALSE)
   }
-  measure_set <- .resolve_measure_set(measure_set)
+  net_list <- networks   # internal name, kept to avoid churning the body
+  measure_set <- .with_isolate(.resolve_measure_set(measure_set))
 
   data <- as.data.frame(data)
   n <- nrow(data)
@@ -387,6 +459,7 @@ netquickpred <- function(data,
   types <- .resolve_attr_types(data, attr_types)
 
   has_nets <- !is.null(net_list) && length(net_list) > 0
+  iso_all <- character(0)
   net_names <- character(0)
   mats <- list()
   struct_list <- NULL
@@ -454,7 +527,7 @@ netquickpred <- function(data,
           is.null(names(net_directed)) ||
           !all(net_names %in% names(net_directed))) {
         stop("`net_directed` must be a named logical vector without NA, ",
-             "with one entry per network in `net_list`.", call. = FALSE)
+             "with one entry per network in `networks`.", call. = FALSE)
       }
       net_directed <- net_directed[net_names]
     }
@@ -465,6 +538,16 @@ netquickpred <- function(data,
     feat_df <- .net_feature_frame(gs, data, measure_set, attr_types = types,
                                   net_names = net_names,
                                   clash_names = var_names)
+    # Only a VARYING isolate flag is worth forcing past the screen: a network
+    # with no isolates (or nothing but isolates) yields a constant column,
+    # which offsets nothing and would be dropped downstream anyway. Selecting
+    # it would just put a dead name in the reported predictor set.
+    iso_all <- intersect(.isolate_feat_names(net_names, var_names),
+                         names(feat_df))
+    iso_all <- iso_all[vapply(iso_all, function(nm) {
+      v <- stats::var(as.numeric(feat_df[[nm]]), na.rm = TRUE)
+      isTRUE(is.finite(v) && v > 0)
+    }, logical(1))]
     feat_exp <- .qp_expand_columns(feat_df)
     # generative source map: which attribute/network each feature column
     # derives from (structural measures have no source attribute)
@@ -583,6 +666,32 @@ netquickpred <- function(data,
     sel_feats <- names(r$feats)[r$feats >= mincor]
     if (!is.null(allowed_attrs)) sel_attrs <- intersect(sel_attrs, allowed_attrs)
     if (!is.null(allowed_feats)) sel_feats <- intersect(sel_feats, allowed_feats)
+    # The isolate flag enters UNSCREENED and is never pruned: it is not a
+    # predictor competing on its own merits but the missing-data indicator
+    # for this network's alter-based features, which are NA for isolates and
+    # mean-filled downstream. Dropping it for a weak marginal correlation
+    # would leave the model unable to offset that fill. Restricted to the
+    # allowed universe so a dropped network's flag never sneaks back in.
+    iso_feats <- intersect(iso_all, names(r$feats))
+    if (!is.null(allowed_feats)) iso_feats <- intersect(iso_feats, allowed_feats)
+    if (length(iso_feats)) {
+      # The flag's only job is to offset the mean-fill that THIS network's
+      # alter-based features get for isolates. If none of that network's alter
+      # features entered the model, there is nothing to offset, so the flag is
+      # not forced in. (Alter features are the ones with a source attribute;
+      # structural measures have none.)
+      alter_sel <- sel_feats[!is.na(feat_src_attr[sel_feats])]
+      alter_nets <- unique(feat_src_net[alter_sel])
+      iso_feats <- iso_feats[feat_src_net[iso_feats] %in% alter_nets]
+      iso_feats <- .dedup_isolate_feats(iso_feats, feat_df,
+                                        # even with pruning switched off,
+                                        # exactly-duplicated flags are rank
+                                        # deficient and never wanted
+                                        threshold = if (collin_method == "none")
+                                          0.999 else collin_threshold,
+                                        relevance = r$feats)
+    }
+    sel_feats <- union(sel_feats, iso_feats)
     step <- stats::setNames(rep(1L, length(sel_attrs) + length(sel_feats)),
                             c(sel_attrs, sel_feats))
     frontier <- sel_attrs
@@ -607,7 +716,7 @@ netquickpred <- function(data,
     units <- c(sel_attrs, sel_feats)
     rel_all <- c(r$attrs, r$feats)[units]
     kept <- .qp_prune_units(units, unit_col_map, X = M, Cmat = C,
-                            relevance = rel_all, exempt = character(0),
+                            relevance = rel_all, exempt = iso_feats,
                             method = collin_method,
                             threshold = collin_threshold)
     list(kind = "attribute",

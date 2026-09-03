@@ -6,12 +6,12 @@
 list of networks}
 \usage{
 net_predictors(
-  net_list,
+  networks,
   attr_list,
   attr_types = NULL,
   measure_set = "core",
   output = c("measures", "pca", "both"),
-  n_components = 5,
+  PCA = list(n = 5, ratio = 10),
   keep_vars = NULL,
   residualize_kept = FALSE,
   impute_na = c("mean", "complete_cases"),
@@ -21,11 +21,11 @@ net_predictors(
 )
 }
 \arguments{
-\item{net_list}{A list of networks (igraph / network / adjacency matrix),
+\item{networks}{A list of networks (igraph / network / adjacency matrix),
 optionally named - names are carried through as `network_id`.}
 
 \item{attr_list}{A list of attribute data.frames, same length and order as
-`net_list`, sharing the same column names/types ("the same attribute set").}
+`networks`, sharing the same column names/types ("the same attribute set").}
 
 \item{attr_types}{Optional named character vector overriding auto-detected
 attribute types, applied to every network.}
@@ -38,7 +38,10 @@ measures are unioned, e.g. \code{c("core", "total_degree")}). Default
 
 \item{output}{One of "measures", "pca", "both" - see Details.}
 
-\item{n_components}{Number of principal components to keep (default 5).}
+\item{PCA}{Predictor budget: a list with `n` (a fixed maximum number of
+components) and/or `ratio` (rows per component). The default keeps the
+historical cap of 5 components and additionally refuses to exceed a 10:1
+rows-per-component budget, so small node sets get fewer components.}
 
 \item{keep_vars}{Character vector of raw measure column names to preserve
 untransformed. Required (non-empty) when `output = "both"`.}
@@ -69,7 +72,7 @@ If `output = "pca"` or `"both"`: a list with
 }
 \description{
 Applies \code{\link{net_measures}} (with the requested `measure_set`)
-to each network/attribute pair in `net_list`/`attr_list`, stacks the
+to each network/attribute pair in `networks`/`attr_list`, stacks the
 results, and optionally reduces the stacked measures to principal
 components suitable as auxiliary predictors in a multiple-imputation model
 (e.g. `mice` with `method = "pmm"`).

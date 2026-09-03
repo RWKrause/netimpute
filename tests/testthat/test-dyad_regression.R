@@ -76,7 +76,7 @@ test_that("dyad_regression: family argument is honoured (binomial on a binary ta
 test_that("dyad_regression: other_net_predictors = 'pca' reduces degree terms but keeps dyad-level cross-network terms raw", {
   extra <- fx_bin_directed(n = 20, seed = 999)
   res <- dyad_regression(list(friends = nets$friends_bin, advice = nets$advice_weighted, extra = extra),
-                          attrs, target = "friends", other_net_predictors = "pca", n_components = 2)
+                          attrs, target = "friends", other_net_predictors = "pca", PCA = list(n = 2))
   expect_true(all(paste0("other_net_PC", 1:2) %in% names(res$data)))
   # x_ij ~ y_ij (and y_ji) cross-network terms must survive as raw columns
   expect_true(all(c("advice_tie", "extra_tie",
@@ -90,12 +90,12 @@ test_that("dyad_regression: other_net_predictors = 'pca' reduces degree terms bu
   expect_s3_class(res$pca_model, "prcomp")
 })
 
-test_that("dyad_regression: n_components controls the number of PCA terms", {
+test_that("dyad_regression: PCA$n controls the number of PCA terms", {
   extra1 <- fx_bin_directed(n = 20, seed = 991)
   extra2 <- fx_weighted(n = 20, seed = 992)
   res <- dyad_regression(list(friends = nets$friends_bin, advice = nets$advice_weighted,
                                e1 = extra1, e2 = extra2),
-                          attrs, target = "friends", other_net_predictors = "pca", n_components = 5)
+                          attrs, target = "friends", other_net_predictors = "pca", PCA = list(n = 5))
   expect_equal(sum(grepl("^other_net_PC", names(res$data))), 5)
 })
 
@@ -192,7 +192,7 @@ test_that("dyad_regression: works with a single network (no other-network terms)
                          names(res$data))))
 })
 
-test_that("dyad_regression: rejects a signed network anywhere in net_list", {
+test_that("dyad_regression: rejects a signed network anywhere in `networks`", {
   expect_error(
     dyad_regression(list(friends = nets$friends_bin, trust = fx_signed(n = 20)), attrs,
                      target = "friends"),

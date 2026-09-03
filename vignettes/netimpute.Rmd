@@ -95,7 +95,7 @@ together.
 ```{r}
 done <- complete_netmice(fit, 1)
 str(done$data)
-sum(is.na(done$net_list$friends))
+sum(is.na(done$networks$friends))
 ```
 
 ## Checking convergence
@@ -128,6 +128,27 @@ The numbers behind the plots are on the fitted object: `chainMean`/`chainVar`
 for attributes, `netChain` for the whole-network diagnostics, and
 `netImpMean`/`netImpVar` for the imputed ties.
 
+### R-hat
+
+`netmice()` also computes rank-normalized split-R-hat for every one of those
+quantities, after discarding the first half of the iterations. R-hat compares
+the variance *between* chains to the variance *within* them: at convergence
+the chains are exploring the same distribution and the ratio approaches 1.
+Anything above 1.05 gets a warning naming the culprits.
+
+```{r}
+round(sort(fit$rhat, decreasing = TRUE), 3)
+```
+
+Two things to keep in mind when reading it. Constant traces give `NA` rather
+than a number — an isolate count that never moves has no within-chain variance
+to compare against, and that is not a failure. And R-hat is a large-sample
+statistic: at `maxit = 10` the burn-in leaves five iterations, which
+split-R-hat halves again to between two and three draws per half-chain. That
+is far too few to trust, in either direction, and `netmice()` says so. If you
+intend to take R-hat seriously, use a `maxit` in the low hundreds; the default
+of 20 is chosen for the trace plots, not for this.
+
 ## Using the completed data
 
 There is no pooling helper: fit your model to each completed dataset and pool
@@ -138,7 +159,7 @@ flows into the pooled standard errors.
 ```{r}
 fits <- lapply(seq_len(fit$m), function(k) {
   d <- complete_netmice(fit, k)
-  d$data$friends_indeg <- colSums(d$net_list$friends)
+  d$data$friends_indeg <- colSums(d$networks$friends)
   lm(perf ~ age + friends_indeg, data = d$data)
 })
 
@@ -192,6 +213,16 @@ Both lists are reproduced in full in the "Dyad-level term names" and
 
 ## Steering the models
 
+When `models` is left `NULL`, `netmice()` builds each imputation model
+automatically and prints a one-off reminder that specifying them is better.
+That advice is not boilerplate. An imputation model has to be at least as rich
+as the analysis model you intend to fit: if you will estimate an `age * female`
+interaction but impute without one, the imputations are drawn from a model in
+which that interaction is zero, and the pooled estimate is biased toward the
+null no matter how large `m` is. This is the congeniality requirement of Meng
+(1994, *Statistical Science* 9(4), 538–558); for the network case see Krause,
+Huisman, Steglich & Snijders (2020, *Social Networks* 62, 99–112).
+
 `models` protects a hypothesised relationship: the terms you name always enter
 that target's imputation model, whatever the automatic predictor machinery
 decides. Formulas are given as strings; the left-hand side names the target.
@@ -233,6 +264,29 @@ fit3 <- netmice(staff, nets, m = 5, maxit = 10, seed = 1, printFlag = FALSE,
                 predictor_selection = qp)
 ```
 
+### Selection and the PCA budget interact
+
+Selection does not switch the PCA off. The `PCA` budget applies *on top* of
+whatever `netquickpred()` keeps, so the two have to be set with each other in
+mind. `PCA$ratio` is counted against observed rows — or, for a binary target,
+observed *events* — and at ordinary network sizes that is a much smaller
+number than the `mincor` screen leaves behind. When that happens the selected
+variables are still collapsed into components, and selection has changed
+*which* variables form them rather than whether components are used at all.
+
+`netmice()` says so when it happens, once per call:
+
+```{r}
+invisible(netmice(staff, nets, predictor_selection = "quickpred",
+                  m = 1, maxit = 2, seed = 1, printFlag = TRUE))
+```
+
+If you want named coefficients for the variables you selected, either raise
+`mincor` until the selection fits, or widen the budget — a *smaller*
+`PCA$ratio`, or an explicit `PCA$n`. Note that raising `mincor` far enough to
+matter can push it above the chance-correlation floor at small $n$, so check
+what survives before relying on it.
+
 ## Constraints on where ties can exist
 
 `structural` marks cells that are zero *by design* — nominations that could not
@@ -249,7 +303,7 @@ friends_split[structural] <- 0
 
 fit4 <- netmice(staff, list(friends = friends_split), structural = structural,
                 m = 3, maxit = 5, seed = 1, printFlag = FALSE)
-all(complete_netmice(fit4, 1)$net_list$friends[structural] == 0)
+all(complete_netmice(fit4, 1)$networks$friends[structural] == 0)
 ```
 
 `net_dependence` expresses logical relations *between* networks: `necessary`
@@ -270,9 +324,91 @@ fit5 <- netmice(
   m = 3, maxit = 5, seed = 1, printFlag = FALSE
 )
 
-out <- complete_netmice(fit5, 1)$net_list
+out <- complete_netmice(fit5, 1)$networks
 all(out$advice[out$friends == 0 & row(out$friends) != col(out$friends)] == 0)
 ```
+
+## Supplying networks as an edgelist
+
+Adjacency matrices are not how most network data arrives. `networks` also
+accepts a single data.frame edgelist, described by `edgelist_options`.
+
+Because an edgelist carries node *names*, they have to be resolved against
+something: `id` names the column of `data` holding those identifiers, and is
+required for edgelist input. (With matrices `id` is optional — it matches and
+reorders their dimnames — but supplying it is safer than trusting row order.)
+
+```{r}
+ids <- paste0("e", seq_len(n))
+staff_id <- cbind(pid = ids, staff)
+
+# the same `friends` network, written out as edges
+present <- which(friends == 1, arr.ind = TRUE)
+edges <- data.frame(from = ids[present[, 1]], to = ids[present[, 2]])
+head(edges, 3)
+
+fit_el <- netmice(staff_id, networks = edges, id = "pid",
+                  m = 2, maxit = 5, seed = 1, printFlag = FALSE)
+dim(fit_el$networks$net1)
+```
+
+Note what an edgelist can and cannot say. It records which ties *exist*; every
+other cell is a zero by omission. So the round trip above is not lossless —
+`friends` had 60 cells marked `NA`, and those became zeros, because nothing in
+an edgelist distinguishes "no tie" from "not asked".
+
+That is what `missing` is for: it names the nodes whose ties are unknown, so
+their unlisted cells become `NA` instead of 0.
+
+```{r}
+fit_el2 <- netmice(staff_id, networks = edges, id = "pid",
+                   edgelist_options = list(missing = ids[1:3]),
+                   m = 2, maxit = 5, seed = 1, printFlag = FALSE)
+sum(is.na(fit_el2$networks$net1))
+```
+
+By default `missing` means *outgoing* ties — the actor-non-response case,
+where somebody did not report but others could still nominate them. Pass a
+list with `out` and `in` to say otherwise. netimpute warns only when the
+direction genuinely conflicts: a node listed as a *sender* while marked
+`missing$out`. Appearing as a *receiver* while marked `missing$out` is normal
+and stays silent.
+
+### Several networks from one edgelist
+
+`edgelist_split` turns one edgelist into many networks. In `"long"` format it
+splits on the interaction of the named columns, so `c("wave", "question")`
+over three waves and two questions yields six networks, named
+`wave_1_question_a` and so on.
+
+```{r}
+edges2 <- rbind(cbind(edges, wave = 1), cbind(edges[1:40, ], wave = 2))
+fit_w <- netmice(staff_id, networks = edges2, id = "pid",
+                 edgelist_options = list(edgelist_split = "wave"),
+                 m = 2, maxit = 5, seed = 1, printFlag = FALSE)
+names(fit_w$networks)
+```
+
+In `"wide"` format each column named in `edgelist_split` is its own network,
+holding that tie's value or `NA` — which is how you express partial
+observation that the long format cannot.
+
+`nodelist` supplies the roster, which matters because isolates and wholly
+missing people never appear in an edgelist at all. It takes a column of
+`data`, a vector, or a named list keyed per network (or per split value, whose
+node sets are then intersected). A node off a network's roster is marked
+**structurally absent** there: fixed at 0, never imputed. A tie whose endpoint
+is off the roster is an error, since it means the roster is wrong.
+
+Any node that appears in the edgelist, `nodelist` or `missing` but not in
+`data` is added as a new row with all attributes missing, and `netmice()`
+warns, listing separately the nodes added with connections, as isolates, and
+entirely missing. Those are the rows whose imputations carry the most
+uncertainty, since nothing about them was observed.
+
+Finally, `structural` accepts an edgelist too, listing the cells fixed at 0.
+It reads the same `edgelist_options`, except `missing`, which is ignored —
+a structural constraint is always known.
 
 ## Directed and undirected networks
 
@@ -290,7 +426,7 @@ und[lower.tri(und)] <- t(und)[lower.tri(und)]
 
 fit6 <- netmice(staff, list(contact = und), m = 3, maxit = 5, seed = 1,
                 printFlag = FALSE)
-isSymmetric(unname(complete_netmice(fit6, 1)$net_list$contact))
+isSymmetric(unname(complete_netmice(fit6, 1)$networks$contact))
 ```
 
 The classification cannot be recovered after the fact: a directed network whose

@@ -2,7 +2,7 @@
 #' list of networks
 #'
 #' Applies \code{\link{net_measures}} (with the requested `measure_set`)
-#' to each network/attribute pair in `net_list`/`attr_list`, stacks the
+#' to each network/attribute pair in `networks`/`attr_list`, stacks the
 #' results, and optionally reduces the stacked measures to principal
 #' components suitable as auxiliary predictors in a multiple-imputation model
 #' (e.g. `mice` with `method = "pmm"`).
@@ -28,10 +28,10 @@
 #' auxiliary variables prior to PCA is standard practice and is far less
 #' consequential than mean-imputing a substantive analysis variable.
 #'
-#' @param net_list A list of networks (igraph / network / adjacency matrix),
+#' @param networks A list of networks (igraph / network / adjacency matrix),
 #'   optionally named - names are carried through as `network_id`.
 #' @param attr_list A list of attribute data.frames, same length and order as
-#'   `net_list`, sharing the same column names/types ("the same attribute set").
+#'   `networks`, sharing the same column names/types ("the same attribute set").
 #' @param attr_types Optional named character vector overriding auto-detected
 #'   attribute types, applied to every network.
 #' @param measure_set Which network measures to compute, passed to
@@ -40,7 +40,10 @@
 #'   measures are unioned, e.g. \code{c("core", "total_degree")}). Default
 #'   "core".
 #' @param output One of "measures", "pca", "both" - see Details.
-#' @param n_components Number of principal components to keep (default 5).
+#' @param PCA Predictor budget: a list with `n` (a fixed maximum number of
+#'   components) and/or `ratio` (rows per component). The default keeps the
+#'   historical cap of 5 components and additionally refuses to exceed a 10:1
+#'   rows-per-component budget, so small node sets get fewer components.
 #' @param keep_vars Character vector of raw measure column names to preserve
 #'   untransformed. Required (non-empty) when `output = "both"`.
 #' @param residualize_kept Logical (default `FALSE`). If `TRUE`, every
@@ -83,12 +86,12 @@
 #' res <- net_predictors(nets, attrs, measure_set = c("core", "total_degree"),
 #'                        output = "both", keep_vars = c("total_degree"))
 #' head(res$predictors)
-net_predictors <- function(net_list,
+net_predictors <- function(networks,
                            attr_list,
                            attr_types = NULL,
                            measure_set = "core",
                            output = c("measures", "pca", "both"),
-                           n_components = 5,
+                           PCA = list(n = 5, ratio = 10),
                            keep_vars = NULL,
                            residualize_kept = FALSE,
                            impute_na = c("mean", "complete_cases"),
@@ -97,10 +100,12 @@ net_predictors <- function(net_list,
                            use_sna = TRUE) {
   measure_set <- .resolve_measure_set(measure_set)
   output <- match.arg(output)
+  net_list <- networks   # internal name, kept to avoid churning the body
   impute_na <- match.arg(impute_na)
+  PCA <- .validate_pca(PCA)
 
   if (length(net_list) != length(attr_list)) {
-    stop("`net_list` and `attr_list` must have the same length.", call. = FALSE)
+    stop("`networks` and `attr_list` must have the same length.", call. = FALSE)
   }
   if (output == "both" && length(keep_vars) == 0) {
     stop("`keep_vars` must be supplied (non-empty) when output = 'both'.",
@@ -188,7 +193,9 @@ net_predictors <- function(net_list,
     pca_input <- pca_input[, setdiff(colnames(pca_input), bad), drop = FALSE]
   }
 
-  n_components <- min(n_components, ncol(pca_input))
+  # rows here are nodes, and the measures are continuous, so the budget is
+  # simply the row count over `ratio`
+  n_components <- min(.pca_budget(PCA, nrow(pca_input)), ncol(pca_input))
   pca_fit <- stats::prcomp(pca_input, center = TRUE, scale. = scale_pca)
   comps <- as.data.frame(pca_fit$x[, seq_len(n_components), drop = FALSE])
   names(comps) <- paste0("PC", seq_len(n_components))

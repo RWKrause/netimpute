@@ -63,7 +63,7 @@ completed <- complete_netmice(fit, 1)
 print(head(completed$data))
 cat("Any remaining NA in attributes:", anyNA(completed$data), "\n")
 cat("Any remaining NA in friendship ties:",
-    anyNA(completed$net_list$friends[row(friends) != col(friends)]), "\n")
+    anyNA(completed$networks$friends[row(friends) != col(friends)]), "\n")
 
 cat("\n---- Convergence diagnostics: chain means for 'age' across iterations ----\n")
 print(round(fit$chainMean["age", , ], 2))

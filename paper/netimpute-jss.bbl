@@ -15,6 +15,16 @@ Csardi, G. and Nepusz, T. (2006).
 \newblock The {igraph} software package for complex network research.
 \newblock In {\em InterJournal, Complex Systems}, page 1695.
 
+\bibitem[Gelman and Rubin, 1992]{GelmanRubin1992}
+Gelman, A. and Rubin, D.~B. (1992).
+\newblock Inference from iterative simulation using multiple sequences.
+\newblock {\em Statistical Science}, 7(4):457--472.
+
+\bibitem[Harrell, 2015]{Harrell2015}
+Harrell, F.~E. (2015).
+\newblock {\em Regression Modeling Strategies}.
+\newblock Springer, New York, 2nd edition.
+
 \bibitem[Hollway, 2021]{manynet}
 Hollway, J. (2021).
 \newblock {\em manynet: Many Ways to Make and Modify Myriad Networks}.
@@ -64,10 +74,20 @@ Little, R. J.~A. and Rubin, D.~B. (2002).
 \newblock {\em Statistical Analysis with Missing Data}.
 \newblock Wiley, Hoboken, NJ, 2nd edition.
 
+\bibitem[Meng, 1994]{Meng1994}
+Meng, X.-L. (1994).
+\newblock Multiple-imputation inferences with uncongenial sources of input.
+\newblock {\em Statistical Science}, 9(4):538--558.
+
 \bibitem[Opsahl and Panzarasa, 2009]{OpsahlPanzarasa2009}
 Opsahl, T. and Panzarasa, P. (2009).
 \newblock Clustering in weighted networks.
 \newblock {\em Social Networks}, 31(2):155--163.
+
+\bibitem[Peduzzi et~al., 1996]{Peduzzi1996}
+Peduzzi, P., Concato, J., Kemper, E., Holford, T.~R., and Feinstein, A.~R. (1996).
+\newblock A simulation study of the number of events per variable in logistic regression analysis.
+\newblock {\em Journal of Clinical Epidemiology}, 49(12):1373--1379.
 
 \bibitem[Robins et~al., 2007]{Robins2007}
 Robins, G., Pattison, P., Kalish, Y., and Lusher, D. (2007).
@@ -93,6 +113,11 @@ Snijders, T.~A. (2017).
 {van Buuren}, S. and Groothuis-Oudshoorn, K. (2011).
 \newblock {mice}: Multivariate imputation by chained equations in {R}.
 \newblock {\em Journal of Statistical Software}, 45(3):1--67.
+
+\bibitem[Vehtari et~al., 2021]{Vehtari2021}
+Vehtari, A., Gelman, A., Simpson, D., Carpenter, B., and B\"urkner, P.-C. (2021).
+\newblock Rank-normalization, folding, and localization: An improved $\widehat{R}$ for assessing convergence of {MCMC} (with discussion).
+\newblock {\em Bayesian Analysis}, 16(2):667--718.
 
 \bibitem[Venables and Ripley, 2002]{Venables2002}
 Venables, W.~N. and Ripley, B.~D. (2002).
