@@ -17,6 +17,7 @@ netmice(
   attr_types = NULL,
   other_net_predictors = c("raw", "pca"),
   PCA = list(n = NULL, ratio = 10),
+  PCA_attributes = NULL,
   net_random_intercepts = NULL,
   structural = NULL,
   net_dependence = NULL,
@@ -171,6 +172,21 @@ Details) collapses the remaining predictors to components.}
   separate the data perfectly. Continuous and multinomial targets use the
   observed row count. The default `ratio = 10` is the conventional
   events-per-variable floor (Peduzzi et al. 1996; Harrell 2015).}
+
+\item{PCA_attributes}{Optional separate budget for the **attribute**
+  imputation models. `NULL` (default) inherits `PCA`, reproducing earlier
+  behaviour exactly. `"none"` imposes no budget on attribute models, so
+  their predictors keep their own coefficients instead of being collapsed
+  to components. A `list(n=, ratio=)` sets an attribute-only budget.
+  Tie models always use `PCA`.
+
+  The two sides are not comparable: an attribute model is budgeted against
+  observed *rows*, a tie model against observed *events*, which at typical
+  network sizes differ by an order of magnitude - so one `ratio` need not
+  suit both. Use `"none"` when the attribute predictors are a short,
+  deliberately chosen set whose individual coefficients are the point;
+  note that it removes the safeguard, so a wide predictor set against few
+  observed rows can leave the univariate models near-singular.}
 
 \item{net_random_intercepts}{`NULL` (default) or a character vector - any
 of `"ego"`, `"alter"`, `"dyad"`. When set, the working model for

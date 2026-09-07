@@ -35,6 +35,39 @@
   list(n = if (is.null(n)) NULL else as.integer(floor(n)), ratio = ratio)
 }
 
+#' Resolve the attribute-model PCA budget
+#'
+#' `PCA` is otherwise a single call-level setting shared by the attribute and
+#' the tie models. Their predictor sets are not comparable, though: an
+#' attribute model is budgeted against observed *rows* (order 10^2 here) while
+#' a tie model is budgeted against observed *events* (order 10^3), so one
+#' `ratio` cannot be right for both. `PCA_attributes` lets the attribute side
+#' be set independently, including switching the collapse off entirely -
+#' useful when the attribute predictors are a short, deliberately chosen set
+#' whose individual coefficients are the point.
+#'
+#' @param PCA_attributes `NULL` to inherit `PCA` (the default, and the only
+#'   value that reproduces pre-0.9 behaviour); `"none"` to leave attribute
+#'   predictors uncollapsed; or a `list(n=, ratio=)` used for attribute
+#'   models only.
+#' @param PCA The already-validated call-level `PCA` list.
+#' @return A validated PCA list, or `NULL` meaning "impose no budget".
+#'   `.clean_predictor_matrix()` treats `max_cols = NULL` as no cap, so `NULL`
+#'   needs no special handling downstream.
+#' @noRd
+.resolve_attribute_pca <- function(PCA_attributes, PCA) {
+  if (is.null(PCA_attributes)) return(PCA)
+  if (is.character(PCA_attributes)) {
+    if (!identical(PCA_attributes, "none")) {
+      stop("`PCA_attributes` must be NULL (inherit `PCA`), \"none\" (no ",
+           "collapse for attribute models), or a list like ",
+           "PCA = list(n = 5).", call. = FALSE)
+    }
+    return(NULL)
+  }
+  .validate_pca(PCA_attributes)
+}
+
 #' Effective sample size backing one model's predictors
 #'
 #' For a binary target this is the *minority class count* among the observed

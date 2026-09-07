@@ -812,6 +812,7 @@ net_diagnostics <- function(mat, directed = NULL) {
                            measure_set,
                            other_net_predictors,
                            PCA,
+                           PCA_attr,
                            net_random_intercepts,
                            model_map,
                            qp_pred,
@@ -914,10 +915,12 @@ net_diagnostics <- function(mat, directed = NULL) {
           iso_feats <- .dedup_isolate_feats(iso_feats, net_feats_df)
         }
         # predictor budget for THIS model: a binary attribute is limited by
-        # its rarer category, anything else by its observed row count
-        v_budget <- .pca_budget(
-          PCA, .pca_denom(cur_data[[v]], ry,
-                          binary = identical(attr_types[[v]], "binary")))
+        # its rarer category, anything else by its observed row count.
+        # PCA_attr is NULL when `PCA_attributes = "none"` asked for no
+        # collapse at all; .clean_predictor_matrix() reads that as "no cap".
+        v_budget <- if (is.null(PCA_attr)) NULL else .pca_budget(
+          PCA_attr, .pca_denom(cur_data[[v]], ry,
+                               binary = identical(attr_types[[v]], "binary")))
         if (is.null(sel)) {
           # net_feats_df is NULL when every network was dropped via `targets`
           auto_x <- .clean_predictor_matrix(
@@ -946,7 +949,8 @@ net_diagnostics <- function(mat, directed = NULL) {
           }
           raw_x <- if (length(parts)) do.call(cbind, parts) else
             matrix(numeric(0), nrow(cur_data), 0)
-          if (im == 1L && it == 1L && ncol(raw_x) > v_budget) {
+          if (im == 1L && it == 1L && !is.null(v_budget) &&
+              ncol(raw_x) > v_budget) {
             pca_notice[[length(pca_notice) + 1L]] <- list(
               target = v, n_in = ncol(raw_x), budget = v_budget)
           }
@@ -1508,6 +1512,20 @@ net_diagnostics <- function(mat, directed = NULL) {
 #'   separate the data perfectly. Continuous and multinomial targets use the
 #'   observed row count. The default `ratio = 10` is the conventional
 #'   events-per-variable floor (Peduzzi et al. 1996; Harrell 2015).
+#' @param PCA_attributes Optional separate budget for the **attribute**
+#'   imputation models. `NULL` (default) inherits `PCA`, reproducing earlier
+#'   behaviour exactly. `"none"` imposes no budget on attribute models, so
+#'   their predictors keep their own coefficients instead of being collapsed
+#'   to components. A `list(n=, ratio=)` sets an attribute-only budget.
+#'   Tie models always use `PCA`.
+#'
+#'   The two sides are not comparable: an attribute model is budgeted against
+#'   observed *rows*, a tie model against observed *events*, which at typical
+#'   network sizes differ by an order of magnitude - so one `ratio` need not
+#'   suit both. Use `"none"` when the attribute predictors are a short,
+#'   deliberately chosen set whose individual coefficients are the point;
+#'   note that it removes the safeguard, so a wide predictor set against few
+#'   observed rows can leave the univariate models near-singular.
 #' @param net_random_intercepts `NULL` (default) or a character vector - any
 #'   of `"ego"`, `"alter"`, `"dyad"`. When set, the working model for
 #'   *network-tie* imputation is a linear mixed model fit with
@@ -1746,6 +1764,7 @@ netmice <- function(data,
                     attr_types = NULL,
                     other_net_predictors = c("raw", "pca"),
                     PCA = list(n = NULL, ratio = 10),
+                    PCA_attributes = NULL,
                     net_random_intercepts = NULL,
                     structural = NULL,
                     net_dependence = NULL,
@@ -1768,6 +1787,7 @@ netmice <- function(data,
   measure_set <- .resolve_measure_set(measure_set)
   other_net_predictors <- match.arg(other_net_predictors)
   PCA <- .validate_pca(PCA)
+  PCA_attr <- .resolve_attribute_pca(PCA_attributes, PCA)
   if (!is.null(net_random_intercepts)) {
     net_random_intercepts <- match.arg(net_random_intercepts,
                                        c("ego", "alter", "dyad"),
@@ -2150,6 +2170,7 @@ netmice <- function(data,
       measure_set = measure_set,
       other_net_predictors = other_net_predictors,
       PCA = PCA,
+      PCA_attr = PCA_attr,
       net_random_intercepts = net_random_intercepts,
       model_map = model_map,
       qp_pred = if (!is.null(qp)) qp$predictors else NULL,

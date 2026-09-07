@@ -29,6 +29,21 @@
 
 ## New features
 
+* **`netmice()` gains `PCA_attributes`**, an optional separate predictor
+  budget for the attribute imputation models. `NULL` (the default) inherits
+  `PCA` and reproduces earlier behaviour exactly; `"none"` imposes no budget,
+  so attribute predictors keep their own coefficients instead of being
+  collapsed to principal components; a `list(n=, ratio=)` sets an
+  attribute-only budget. Tie models always use `PCA`.
+
+  The two sides are not comparable: an attribute model is budgeted against
+  observed *rows*, a tie model against observed *events*, which at typical
+  network sizes differ by an order of magnitude, so one `ratio` need not suit
+  both. `"none"` is intended for a short, deliberately chosen predictor set
+  whose individual coefficients are the point; it removes the safeguard, so a
+  wide predictor set against few observed rows can leave the univariate
+  models near-singular.
+
 * **Networks may be supplied as an edgelist.** `networks` accepts a data.frame
   instead of a list of matrices, described by the new `edgelist_options`
   argument (`edgelist_names`, `edgelist_format`, `edgelist_split`, `nodelist`,
