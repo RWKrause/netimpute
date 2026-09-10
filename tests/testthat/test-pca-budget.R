@@ -155,3 +155,46 @@ test_that("netmice: printFlag = FALSE silences the note", {
                              m = 1, maxit = 1, seed = 1, printFlag = FALSE)))
   expect_false(any(grepl("still leaves more predictors", msgs)))
 })
+
+test_that(".resolve_network_pca: inherits, disables, or overrides", {
+  PCA <- netimpute:::.validate_pca(list(ratio = 10))
+  expect_identical(netimpute:::.resolve_network_pca(NULL, PCA), PCA)
+  expect_null(netimpute:::.resolve_network_pca("none", PCA))
+  own <- netimpute:::.resolve_network_pca(list(n = 3), PCA)
+  expect_equal(own$n, 3L)
+  expect_null(own$ratio)
+  expect_error(netimpute:::.resolve_network_pca("wide", PCA),
+               "must be NULL")
+})
+
+test_that("PCA_networks budgets the tie models independently of PCA", {
+  fx <- make_budget_fixture()
+  # Both runs share PCA = list(n = 5) for the attribute models; only the tie
+  # budget differs. n = 1 leaves the collapsible dyad terms as a single
+  # component, n = 30 is wider than the ~19 collapsible columns so none are
+  # collapsed at all -- a contrast the shared `PCA` alone cannot produce.
+  tight <- suppress_budget_overflow(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 7,
+            PCA = list(n = 5), PCA_networks = list(n = 1), printFlag = FALSE))
+  loose <- suppress_budget_overflow(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 7,
+            PCA = list(n = 5), PCA_networks = list(n = 30), printFlag = FALSE))
+  expect_equal(tight$PCA_networks$n, 1L)
+  expect_equal(loose$PCA_networks$n, 30L)
+  expect_equal(tight$PCA$n, 5L)   # the attribute side is untouched
+  # the tie models saw different predictor counts, so the imputed networks
+  # cannot agree; the call must still complete and fill every cell
+  off <- which(row(fx$nets$friends) != col(fx$nets$friends))
+  expect_false(anyNA(complete_netmice(tight, 1)$networks$friends[off]))
+  expect_false(isTRUE(all.equal(complete_netmice(tight, 1)$networks$friends,
+                                complete_netmice(loose, 1)$networks$friends)))
+})
+
+test_that("PCA_networks = 'none' imposes no tie-model budget", {
+  fx <- make_budget_fixture()
+  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 7,
+                 PCA = list(n = 1), PCA_networks = "none", printFlag = FALSE)
+  expect_null(fit$PCA_networks)
+  off <- which(row(fx$nets$friends) != col(fx$nets$friends))
+  expect_false(anyNA(complete_netmice(fit, 1)$networks$friends[off]))
+})

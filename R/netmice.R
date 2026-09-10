@@ -359,14 +359,15 @@ net_diagnostics <- function(mat, directed = NULL) {
 #' column: `col` (its index in the predictor matrix), `static` (per-row
 #' static product), `recip`/`twop` (logical flags).
 #' @noRd
-.gibbs_endo_interactions <- function(xnames, d) {
+.gibbs_endo_interactions <- function(xnames, d,
+                                     endo_names = c("reciprocity", "twopath")) {
   out <- list()
   if (is.null(xnames)) return(out)
   for (k in seq_along(xnames)) {
     nm <- xnames[k]
     if (!grepl(":", nm, fixed = TRUE)) next
     parts <- strsplit(nm, ":", fixed = TRUE)[[1]]
-    endo <- parts %in% c("reciprocity", "twopath")
+    endo <- parts %in% endo_names
     if (!any(endo)) next
     static_parts <- parts[!endo]
     if (!all(static_parts %in% names(d))) next
@@ -378,11 +379,174 @@ net_diagnostics <- function(mat, directed = NULL) {
     # mirror .clean_predictor_matrix()'s NA handling so the recomputed
     # static product matches the fitted column
     if (anyNA(static)) static[is.na(static)] <- mean(static, na.rm = TRUE)
-    out[[nm]] <- list(col = k, static = static,
-                      recip = "reciprocity" %in% parts,
-                      twop = "twopath" %in% parts)
+    # a character vector rather than one flag per statistic: three-way
+    # interactions and any future endogenous term then need no extra code,
+    # and the consumer just multiplies prod(live[endo])
+    out[[nm]] <- list(col = k, static = static, endo = parts[endo])
   }
   out
+}
+
+#' Fit the tie working model on the observed dyads and draw its coefficients
+#'
+#' Replaces the plain `glm()`/`lm()` call the sequential updater used before
+#' 1.1.0, adding an optional ridge penalty. Three things matter here.
+#'
+#' **Every non-intercept coefficient is penalised**, the target's endogenous
+#' statistics and the cross-network `_tie`/`_recip` terms included. Those are
+#' exactly the columns `.clean_predictor_matrix()` protects from the PCA
+#' budget, so they are the ones most likely to be numerous relative to the
+#' events available - exempting them would leave the penalty pointed away from
+#' where the instability lives. The intercept is never penalised: it carries
+#' the baseline density, which must be free to match the observed rate.
+#'
+#' **Predictors are standardised on the observed dyads before fitting**, since
+#' a single `lambda` is only meaningful when the columns are on a common
+#' scale, and the design mixes 0/1 dyad indicators, principal components and
+#' raw attribute differences. Coefficients (and their covariance) are mapped
+#' back to the raw scale before returning, so the sweep's `eta_base` stripping
+#' and its per-cell arithmetic need no knowledge of any of this.
+#'
+#' **The draw uses the penalised covariance.** mice's Bayesian step draws the
+#' coefficient vector from its asymptotic posterior so that between-imputation
+#' variability reflects estimation uncertainty; with a penalty that posterior
+#' is `(X'WX + lambda I)^-1`, which is smaller. That shrinkage is deliberate:
+#' an over-dispersed draw inflates the mean imputed tie probability wherever
+#' ties are rare, for the same convexity reason the penalty itself addresses.
+#'
+#' Returns `intercept` and `beta` on the raw predictor scale, both after the
+#' draw, plus `fitted_obs`, the drawn linear predictor on the observed dyads
+#' (the PMM donor pool for a weighted target).
+#' @noRd
+.fit_tie_model <- function(x, y, ry, binary, net_ridge) {
+  p <- ncol(x)
+  yo <- y[ry]
+  n_obs <- length(yo)
+
+  if (p == 0L || n_obs == 0L) {
+    mu <- if (n_obs) mean(yo) else 0
+    a <- if (!binary) mu else {
+      stats::qlogis(min(max(mu, 1 / (2 * max(n_obs, 1))),
+                        1 - 1 / (2 * max(n_obs, 1))))
+    }
+    return(list(intercept = a, beta = stats::setNames(numeric(0), colnames(x)),
+                fitted_obs = rep(a, n_obs)))
+  }
+
+  Xo <- x[ry, , drop = FALSE]
+  ctr <- colMeans(Xo)
+  sdv <- apply(Xo, 2, stats::sd)
+  # a column constant on the observed dyads carries no information; scaling
+  # it by 1 leaves it centred at exactly zero, so it contributes nothing
+  sdv[!is.finite(sdv) | sdv <= 0] <- 1
+  Zo <- sweep(sweep(Xo, 2, ctr, "-"), 2, sdv, "/")
+  D <- cbind(`(Intercept)` = 1, Zo)
+
+  events <- .pca_denom(yo, NULL, binary = binary)
+  lambda <- .net_ridge_lambda(net_ridge, p, events)
+
+  # `lambda` is dimensionless: the penalty is scaled by the information the
+  # data carry, so that for standardised, roughly orthogonal predictors the
+  # shrinkage factor is about 1/(1 + lambda) whatever the sample size. Using
+  # the raw lambda would make it meaningless - the diagonal of X'WX runs to
+  # hundreds on a dyad design, so a "penalty" of 0.01 would be a no-op.
+  p0 <- min(max(mean(yo), 1 / (2 * n_obs)), 1 - 1 / (2 * n_obs))
+  info <- if (binary) n_obs * p0 * (1 - p0) else n_obs
+  pen_val <- lambda * info
+  pen <- c(0, rep(pen_val, p))   # the intercept is never penalised
+
+  solve_pen <- function(A, rhs) {
+    A <- A + diag(pen, nrow(A))
+    out <- tryCatch(solve(A, rhs), error = function(e) NULL)
+    if (!is.null(out)) return(list(coef = drop(out), A = A))
+    # exactly singular (lambda = 0 with collinear columns, which the
+    # unpenalised path used to surface as an aliased NA coefficient): nudge
+    # the diagonal rather than dropping terms
+    jit <- 1e-6 * max(1, mean(abs(diag(A))))
+    A <- A + diag(jit, nrow(A))
+    list(coef = drop(solve(A, rhs)), A = A)
+  }
+
+  # Keep the linear predictor inside the range where plogis() is not exactly
+  # 0 or 1. Without this a separable design - the norm for a sparse tie model
+  # carrying its whole protected dyad block - drives mu to the boundary, the
+  # IRLS working response (y - mu)/w explodes, and the sweep degenerates into
+  # drawing every missing cell as a certain 0 or a certain 1.
+  ETA_MAX <- 30
+  clamp <- function(e) pmin(pmax(e, -ETA_MAX), ETA_MAX)
+
+  if (binary) {
+    pdev <- function(b) {
+      mu <- stats::plogis(clamp(drop(D %*% b)))
+      mu <- pmin(pmax(mu, 1e-12), 1 - 1e-12)
+      -2 * sum(yo * log(mu) + (1 - yo) * log(1 - mu)) + pen_val * sum(b[-1]^2)
+    }
+    b <- c(stats::qlogis(p0), rep(0, p))
+    dev_cur <- pdev(b)
+    A <- NULL
+    # glm()'s stopping rule and iteration cap, deliberately. Under complete
+    # separation the likelihood has no maximum - the deviance keeps falling as
+    # the coefficients grow - so the criterion IS the regularisation at
+    # lambda = 0, and a tighter one simply walks further toward an infinite
+    # solution. Iterating to a coefficient-change tolerance instead made the
+    # sparse networks saturate: every missing cell drawn as a certain 0 or a
+    # certain 1.
+    for (it in seq_len(25L)) {
+      eta <- clamp(drop(D %*% b))
+      mu <- stats::plogis(eta)
+      w <- pmax(mu * (1 - mu), 1e-6)
+      z <- eta + (yo - mu) / w
+      s <- solve_pen(crossprod(D, D * w), crossprod(D, w * z))
+      A <- s$A
+      # step-halving: plain IRLS is not guaranteed to decrease the deviance
+      # on a near-separable design, and glm() protects itself the same way
+      step <- 1
+      accepted <- FALSE
+      for (h in seq_len(20L)) {
+        b_try <- b + step * (s$coef - b)
+        dev_try <- pdev(b_try)
+        if (is.finite(dev_try) && dev_try <= dev_cur + 1e-8) {
+          accepted <- TRUE
+          break
+        }
+        step <- step / 2
+      }
+      if (!accepted) break
+      converged <- abs(dev_try - dev_cur) / (abs(dev_try) + 0.1) < 1e-8
+      b <- b_try
+      dev_cur <- dev_try
+      if (converged) break
+    }
+    Vc <- tryCatch(chol2inv(chol(A)), error = function(e) NULL)
+  } else {
+    s <- solve_pen(crossprod(D), crossprod(D, yo))
+    b <- s$coef
+    resid <- yo - drop(D %*% b)
+    edf <- max(1, n_obs - (p + 1))
+    sigma2 <- sum(resid^2) / edf
+    Vc <- tryCatch(sigma2 * chol2inv(chol(s$A)), error = function(e) NULL)
+  }
+
+  # Bayesian draw. A chol() failure previously left EVERY coefficient at its
+  # point estimate, silently collapsing between-imputation variance to zero;
+  # nudge the diagonal and draw anyway.
+  if (!is.null(Vc)) {
+    Rch <- tryCatch(chol(Vc), error = function(e) NULL)
+    if (is.null(Rch)) {
+      eps <- 1e-8 * max(1, mean(abs(diag(Vc))))
+      Rch <- tryCatch(chol(Vc + diag(eps, nrow(Vc))), error = function(e) NULL)
+    }
+    if (!is.null(Rch)) {
+      b <- b + drop(crossprod(Rch, stats::rnorm(nrow(Rch))))
+    }
+  }
+
+  # back to the raw predictor scale: eta = a + sum_j b_j (x_j - ctr_j)/sdv_j
+  beta_raw <- b[-1] / sdv
+  a_raw <- b[1] - sum(b[-1] * ctr / sdv)
+  names(beta_raw) <- colnames(x)
+  list(intercept = a_raw, beta = beta_raw,
+       fitted_obs = drop(a_raw + Xo %*% beta_raw))
 }
 
 #' Sequential ("Gibbs") single-tie imputation for one network visit
@@ -441,46 +605,43 @@ net_diagnostics <- function(mat, directed = NULL) {
 #' diverged - used by the unit tests, skipped in production calls.
 #' @noRd
 .impute_ties_gibbs <- function(d, ry, x, mat, binary, donors, check = FALSE,
-                               undirected = FALSE) {
-  endo_int <- .gibbs_endo_interactions(colnames(x), d)
+                               undirected = FALSE, sweeps = 1L,
+                               net_ridge = list(lambda = 0, scale = "fixed"),
+                               gw_decay = list(esp = 0.69, outdegree = 0.69,
+                                               indegree = 0.69)) {
   x <- as.matrix(x)
-  recip_col <- match("reciprocity", colnames(x))
-  twop_col  <- match("twopath", colnames(x))
+  # Which endogenous statistics this design actually carries. A column can be
+  # absent because the target's type excludes it (an undirected target has no
+  # `reciprocity`, a weighted one has no `gw*`), or because it was constant on
+  # the observed dyads and dropped, or absorbed into a principal component -
+  # in every case its coefficient is simply 0 and the sweep stops tracking it.
+  ENDO_ALL <- c("reciprocity", "twopath", "gwesp", "gwodegree", "gwidegree",
+                "gwdegree")
+  endo_col <- stats::setNames(match(ENDO_ALL, colnames(x)), ENDO_ALL)
+  endo_live <- ENDO_ALL[!is.na(endo_col)]
+  endo_int <- .gibbs_endo_interactions(colnames(x), d, endo_names = endo_live)
 
-  # syntactic stand-in names: predictor columns may be PCA components or
-  # model.matrix terms with characters that formulas cannot carry verbatim
-  vnames <- if (ncol(x)) paste0("V", seq_len(ncol(x))) else character(0)
-  df <- stats::setNames(as.data.frame(x), vnames)
-  df$y <- d$y
-  fml <- if (length(vnames)) stats::reformulate(vnames, response = "y") else
-    stats::as.formula("y ~ 1")
-  fit <- if (binary) {
-    suppressWarnings(stats::glm(fml, data = df[ry, , drop = FALSE],
-                                family = stats::binomial()))
-  } else {
-    stats::lm(fml, data = df[ry, , drop = FALSE])
-  }
-  b <- stats::coef(fit)
-  ok <- !is.na(b)
-  Vc <- tryCatch(stats::vcov(fit), error = function(e) NULL)
-  if (!is.null(Vc)) {
-    Rch <- tryCatch(chol(Vc), error = function(e) NULL)
-    if (!is.null(Rch)) {
-      b[ok] <- b[ok] + drop(crossprod(Rch, stats::rnorm(nrow(Rch))))
-    }
-  }
-  b[!ok] <- 0  # aliased (rank-deficient) terms contribute nothing
-  intercept <- b[["(Intercept)"]]
-  beta_x <- b[vnames]
+  fitted <- .fit_tie_model(x = x, y = d$y, ry = ry, binary = binary,
+                           net_ridge = net_ridge)
+  intercept <- fitted$intercept
+  beta_x <- fitted$beta
 
   eta_all <- intercept + drop(x %*% beta_x)
-  b_recip <- if (!is.na(recip_col)) beta_x[[recip_col]] else 0
-  b_twop  <- if (!is.na(twop_col))  beta_x[[twop_col]]  else 0
-  # strip the endogenous contributions once; they are re-added per cell
-  # from the live matrix state inside the sweep
+  b_endo <- stats::setNames(
+    vapply(ENDO_ALL, function(nm) {
+      k <- endo_col[[nm]]
+      if (is.na(k)) 0 else beta_x[[k]]
+    }, numeric(1)), ENDO_ALL)
+  # strip the endogenous contributions once; they are re-added per cell from
+  # the live matrix state inside the sweep. This is exact whatever the columns
+  # hold - which also means a fit-time statistic that disagreed with the
+  # sweep-time one would produce no arithmetic symptom at all, only a
+  # coefficient estimated against a different quantity. The check = TRUE
+  # recomputation below is what guards that.
   eta_base <- eta_all
-  if (!is.na(recip_col)) eta_base <- eta_base - b_recip * x[, recip_col]
-  if (!is.na(twop_col))  eta_base <- eta_base - b_twop  * x[, twop_col]
+  for (nm in endo_live) {
+    eta_base <- eta_base - b_endo[[nm]] * x[, endo_col[[nm]]]
+  }
   for (ei in endo_int) {
     eta_base <- eta_base - beta_x[[ei$col]] * x[, ei$col]
   }
@@ -488,18 +649,47 @@ net_diagnostics <- function(mat, directed = NULL) {
   y_obs <- d$y[ry]
   yhat_obs <- if (!binary) eta_all[ry] else NULL
 
-  B <- (mat != 0) * 1
-  Tp <- B %*% B  # two-path counts; maintained incrementally below
+  B <- .binarize_target(mat)
+  Tp <- B %*% B      # shared-partner counts, maintained incrementally below
+  od <- rowSums(B)   # out- and in-degrees, likewise
+  id <- colSums(B)
+  w_esp <- 1 - exp(-gw_decay$esp)
+  w_od  <- 1 - exp(-gw_decay$outdegree)
+  w_id  <- 1 - exp(-gw_decay$indegree)
 
-  # linear predictor of one cell, with the endogenous statistics read off
-  # the live matrix/two-path state
+  # The endogenous statistics of one cell, read off the live network state.
+  # Every one of these is a change statistic evaluated on the network with
+  # (i, j) removed - hence the `- b` terms - which is what makes the degree
+  # statistics leave-one-out and keeps the outcome out of its own predictor.
+  # Cost is O(1) per cell except gwesp, which is O(n): the same order the
+  # existing Tp bookkeeping already pays per write.
+  live_of <- function(i, j) {
+    b <- B[i, j]
+    v <- stats::setNames(numeric(length(endo_live)), endo_live)
+    for (nm in endo_live) {
+      v[[nm]] <- switch(
+        nm,
+        reciprocity = mat[j, i],
+        twopath     = as.numeric(Tp[i, j] > 0),
+        gwodegree   = w_od^(od[i] - b),
+        gwidegree   = w_id^(id[j] - b),
+        gwdegree    = w_od^(od[i] - b) + w_id^(id[j] - b),
+        gwesp       = {
+          co <- B[i, ] == 1 & B[j, ] == 1     # k reached from both i and j
+          ci <- B[, j] == 1 & B[, i] == 1     # k reaching both j and i
+          s1 <- if (any(co)) sum(w_esp^(Tp[i, co] - b)) else 0
+          s2 <- if (any(ci)) sum(w_esp^(Tp[ci, j] - b)) else 0
+          exp(gw_decay$esp) * (1 - w_esp^Tp[i, j]) + s1 + s2
+        })
+    }
+    v
+  }
   eta_of <- function(r, i, j) {
-    tp <- as.numeric(Tp[i, j] > 0)
-    eta <- eta_base[r] + b_recip * mat[j, i] + b_twop * tp
+    live <- live_of(i, j)
+    eta <- eta_base[r]
+    for (nm in endo_live) eta <- eta + b_endo[[nm]] * live[[nm]]
     for (ei in endo_int) {
-      eta <- eta + beta_x[[ei$col]] * ei$static[r] *
-        (if (ei$recip) mat[j, i] else 1) *
-        (if (ei$twop) tp else 1)
+      eta <- eta + beta_x[[ei$col]] * ei$static[r] * prod(live[ei$endo])
     }
     eta
   }
@@ -518,33 +708,54 @@ net_diagnostics <- function(mat, directed = NULL) {
       Tp[i, ] <<- Tp[i, ] + db * B[j, ]
       Tp[, j] <<- Tp[, j] + db * B[, i]
       B[i, j] <<- B[i, j] + db
+      od[i] <<- od[i] + db
+      id[j] <<- id[j] + db
     }
     invisible(NULL)
   }
+  # Bound the linear predictor before it reaches plogis(). An endogenous
+  # statistic can be large - gwesp's change statistic is bounded only by
+  # exp(decay) + 2(n-2) - and a moderately positive coefficient on one is
+  # enough to pin every probability at exactly 0 or 1, at which point the
+  # sweep stops being stochastic and the network avalanches to complete or
+  # empty. At |eta| = 30 the probability is already within 1e-13 of the
+  # bound, so this changes nothing that was not already degenerate.
+  ETA_CLAMP <- 30
+  clamp <- function(e) min(max(e, -ETA_CLAMP), ETA_CLAMP)
   draw <- function(eta) {
     if (binary) {
-      stats::rbinom(1, 1, stats::plogis(eta))
+      stats::rbinom(1, 1, stats::plogis(clamp(eta)))
     } else {
       nn <- order(abs(yhat_obs - eta))[seq_len(min(donors, length(yhat_obs)))]
       y_obs[nn][sample.int(length(nn), 1)]
     }
   }
 
-  if (undirected) {
-    # An undirected network's two mirror cells are one tie. Drawing them
-    # independently (as the directed sweep does) desymmetrizes the matrix,
-    # which silently reclassifies the network as directed for every derived
-    # measure downstream. Instead each unordered pair is visited once: both
-    # directions' linear predictors are evaluated against the current state,
-    # averaged - on the probability scale for a binary tie, on the linear
-    # predictor scale for a weighted one - and the single resulting draw is
-    # written to both cells.
-    row_of <- matrix(NA_integer_, nrow(mat), ncol(mat))
-    row_of[cbind(d$i, d$j)] <- seq_len(nrow(d))
-    mis <- which(!ry & d$i < d$j)
-    for (r in .shuffle(mis)) {
+  # An undirected network's two mirror cells are one tie. Drawing them
+  # independently (as the directed sweep does) desymmetrizes the matrix,
+  # which silently reclassifies the network as directed for every derived
+  # measure downstream. Instead each unordered pair is visited once: both
+  # directions' linear predictors are evaluated against the current state,
+  # averaged - on the probability scale for a binary tie, on the linear
+  # predictor scale for a weighted one - and the single resulting draw is
+  # written to both cells.
+  row_of <- if (undirected) {
+    ro <- matrix(NA_integer_, nrow(mat), ncol(mat))
+    ro[cbind(d$i, d$j)] <- seq_len(nrow(d))
+    ro
+  } else {
+    NULL
+  }
+  visit <- if (undirected) which(!ry & d$i < d$j) else which(!ry)
+
+  one_sweep <- function() {
+    for (r in .shuffle(visit)) {
       i <- d$i[r]
       j <- d$j[r]
+      if (!undirected) {
+        set_cell(i, j, draw(eta_of(r, i, j)))
+        next
+      }
       r2 <- row_of[j, i]
       # the mirror cell is normally missing too (an undirected target has a
       # symmetric NA pattern by construction). It can still be absent from
@@ -555,10 +766,13 @@ net_diagnostics <- function(mat, directed = NULL) {
         set_cell(i, j, draw(eta_of(r, i, j)))
         next
       }
+      # both etas are read BEFORE either cell is written: between the two
+      # set_cell() calls the matrix is transiently asymmetric, and an eta
+      # evaluated there would see neither the before- nor the after-state
       eta_ij <- eta_of(r, i, j)
       eta_ji <- eta_of(r2, j, i)
       v <- if (binary) {
-        p <- (stats::plogis(eta_ij) + stats::plogis(eta_ji)) / 2
+        p <- (stats::plogis(clamp(eta_ij)) + stats::plogis(clamp(eta_ji))) / 2
         stats::rbinom(1, 1, p)
       } else {
         draw((eta_ij + eta_ji) / 2)
@@ -566,16 +780,34 @@ net_diagnostics <- function(mat, directed = NULL) {
       set_cell(i, j, v)
       set_cell(j, i, v)
     }
-  } else {
-    for (r in .shuffle(which(!ry))) {
-      i <- d$i[r]
-      j <- d$j[r]
-      set_cell(i, j, draw(eta_of(r, i, j)))
-    }
   }
 
+  # `sweeps` passes over the missing cells, each in a fresh random order, all
+  # against the one coefficient vector drawn above. The working model is a
+  # pseudo-likelihood estimate of an ERGM and this loop is that ERGM's
+  # full-conditional Gibbs sampler restricted to the missing cells, so K
+  # governs how far the network state mixes toward the conditional
+  # distribution implied by those coefficients, while `maxit` governs the
+  # outer MICE chain and is where the coefficients are re-estimated.
+  for (sweep_k in seq_len(sweeps)) one_sweep()
+
   if (check) {
-    stopifnot(isTRUE(all.equal(B, (mat != 0) * 1, check.attributes = FALSE)),
+    # The incremental state must still equal a recomputation from scratch,
+    # and - the part that earns its keep - the per-cell statistics must still
+    # equal the vectorised routine that produced the fit-time columns. That
+    # cross-check is the only thing standing between a fit/sweep definitional
+    # drift and a silently wrong imputation.
+    ref <- .ergm_change_stats(.binarize_target(mat), gw_decay)
+    for (nm in intersect(endo_live, c("gwesp", "gwodegree", "gwidegree",
+                                      "gwdegree"))) {
+      got <- vapply(seq_len(nrow(d)),
+                    function(r) live_of(d$i[r], d$j[r])[[nm]], numeric(1))
+      want <- ref[[nm]][cbind(d$i, d$j)]
+      stopifnot(isTRUE(all.equal(got, want, check.attributes = FALSE)))
+    }
+    stopifnot(isTRUE(all.equal(od, rowSums(B), check.attributes = FALSE)),
+              isTRUE(all.equal(id, colSums(B), check.attributes = FALSE)))
+    stopifnot(isTRUE(all.equal(B, .binarize_target(mat), check.attributes = FALSE)),
               isTRUE(all.equal(Tp, B %*% B, check.attributes = FALSE)))
   }
   mat
@@ -648,9 +880,27 @@ net_diagnostics <- function(mat, directed = NULL) {
 #' `keep_raw` names columns that must never be absorbed into the PCA: they
 #' are exempted from the reduction and appended unchanged (still subject to
 #' the NA-fill and constant-column screens). Used for a network target's own
-#' endogenous terms (`reciprocity`, `twopath`) and the cross-network
-#' dyad terms (`*_tie`, `*_recip`), whose named coefficients carry
-#' substantive dependence structure that a composite component would dilute.
+#' endogenous terms (`reciprocity`, and `twopath` or the `gw*` change
+#' statistics) and the cross-network dyad terms (`*_tie`, `*_recip`), whose
+#' named coefficients carry substantive dependence structure that a composite
+#' component would dilute.
+#'
+#' `max_cols` budgets the **total** width, protected columns included. Until
+#' 1.1.0 the cap was applied to the collapsible remainder only and the
+#' protected block was then `cbind`ed on top, so the returned matrix was
+#' `max_cols + length(keep_raw)` columns wide - with eight networks that is 16
+#' extra predictors, and the events-per-variable rule `.pca_denom()` documents
+#' (Peduzzi et al. 1996; Harrell 2015) was silently missed by that margin,
+#' worst on the sparsest networks where the budget is smallest. The protected
+#' columns now consume the budget first.
+#'
+#' One component always survives: squeezing the remainder to zero would throw
+#' away every attribute and cross-network signal the moment the protected
+#' block alone filled the budget, which is exactly the sparse-network case
+#' that needs the most help. When the protected block exceeds the
+#' budget outright is exceeded outright the result carries a `"budget_overflow"`
+#' attribute so the caller -
+#' which knows the target's name - can report it once per call.
 #' @noRd
 .clean_predictor_matrix <- function(x, max_cols = NULL, ry = NULL,
                                     keep_raw = NULL) {
@@ -682,12 +932,26 @@ net_diagnostics <- function(mat, directed = NULL) {
     }
     kept <- x[, keep_idx, drop = FALSE]
     rest <- x[, !keep_idx, drop = FALSE]
-    if (ncol(rest) > max_cols) {
+    # the budget is the TOTAL width: protected columns spend it first, and
+    # whatever is left is what the remainder may collapse to - but never
+    # fewer than one component (see the note above).
+    rest_cap <- max(1L, max_cols - ncol(kept))
+    # strictly greater: a protected block that exactly fills the budget is
+    # working as intended, and the one guaranteed component is a deliberate
+    # small overshoot. Only a block that cannot fit at all is worth a warning,
+    # or every small dataset (where the budget is 1-4 columns) would raise one.
+    overflow <- if (ncol(kept) > max_cols) {
+      list(kept = ncol(kept), budget = max_cols)
+    } else {
+      NULL
+    }
+    if (ncol(rest) > rest_cap) {
       pca <- stats::prcomp(rest, center = TRUE, scale. = TRUE)
-      n_comp <- min(max_cols, sum(pca$sdev > pca$sdev[1] * 1e-8))
+      n_comp <- min(rest_cap, sum(pca$sdev > pca$sdev[1] * 1e-8))
       rest <- keep_varying(pca$x[, seq_len(n_comp), drop = FALSE])
     }
     x <- cbind(kept, rest)
+    if (!is.null(overflow)) attr(x, "budget_overflow") <- overflow
   }
   x
 }
@@ -714,6 +978,38 @@ net_diagnostics <- function(mat, directed = NULL) {
           "variables form the components, not whether components are used. ",
           "Raise `mincor` to select fewer predictors, or widen the budget ",
           "with a smaller `PCA$ratio` (or an explicit `PCA$n`).")
+  invisible(TRUE)
+}
+
+#' Warn that the protected (`keep_raw`) columns alone fill the PCA budget
+#'
+#' The protected dyad-level terms - the target's endogenous statistics and one
+#' `_tie`/`_recip` pair per other network - are never collapsed, so with many
+#' networks they can fill or exceed a sparse target's whole budget. The model
+#' is then fitted at fewer events per variable than `PCA$ratio` asks for, and
+#' the collapsible remainder is down to the single guaranteed component. That
+#' is a real weakening of the fit and the user should hear about it, so unlike
+#' `.pca_selection_notice()` this is a warning and is not silenced by
+#' `printFlag`. Raised once per call, not once per visit.
+#' @noRd
+.budget_overflow_notice <- function(entries) {
+  if (!length(entries)) return(invisible(FALSE))
+  txt <- vapply(entries, function(e)
+    paste0(e$target, " (", e$kept, " protected vs budget ", e$budget, ")"),
+    character(1))
+  msg <- paste0(
+    "netimpute: the protected dyad terms alone exceed the `PCA` budget for: ",
+    paste(txt, collapse = ", "),
+    ". Those models carry more predictors than `PCA$ratio` allows and the ",
+    "remaining predictors are collapsed to a single component. Widen the ",
+    "budget (a smaller `PCA$ratio`, or `PCA_networks`), or supply fewer ",
+    "networks - each additional network adds two protected columns.")
+  # classed so callers who know their design is small can muffle just this
+  # one (see suppress_budget_overflow() in the tests) without also hiding
+  # unrelated warnings from the imputation
+  warning(structure(
+    class = c("netimpute_budget_overflow", "warning", "condition"),
+    list(message = paste0(msg, "\n"), call = NULL)))
   invisible(TRUE)
 }
 
@@ -813,12 +1109,17 @@ net_diagnostics <- function(mat, directed = NULL) {
                            other_net_predictors,
                            PCA,
                            PCA_attr,
+                           PCA_net,
                            net_random_intercepts,
                            model_map,
                            qp_pred,
                            feat_clash_names,
                            net_init,
                            net_update,
+                           net_ridge,
+                           net_sweeps,
+                           net_endo_terms,
+                           net_gw_decay,
                            net_binary,
                            net_undirected,
                            maxit,
@@ -870,6 +1171,7 @@ net_diagnostics <- function(mat, directed = NULL) {
   # collected on the first sweep of the first chain only: the numbers are the
   # same at every visit, and a per-visit message would repeat maxit x m times
   pca_notice <- list()
+  budget_notice <- list()
   for (it in seq_len(maxit)) {
     if (printFlag) {
       cat(" imputation", im, "- iter", it, "- order:",
@@ -921,12 +1223,26 @@ net_diagnostics <- function(mat, directed = NULL) {
         v_budget <- if (is.null(PCA_attr)) NULL else .pca_budget(
           PCA_attr, .pca_denom(cur_data[[v]], ry,
                                binary = identical(attr_types[[v]], "binary")))
+        # `models` extras are the user's congeniality requirement, so they are
+        # never collapsed - but they were also never *counted* against the
+        # budget, a second route past the events-per-variable rule alongside
+        # the `keep_raw` one. Build them first and let them spend the budget,
+        # leaving the auto-generated block to collapse into what remains.
+        extra <- if (!is.null(model_map[[v]])) {
+          .model_extra_terms(model_map[[v]], cbind(other_data, net_feats_df),
+                             ry = ry)
+        } else {
+          NULL
+        }
+        v_budget_auto <- if (is.null(v_budget)) NULL else
+          max(1L, v_budget - if (is.null(extra)) 0L else ncol(extra))
+
         if (is.null(sel)) {
           # net_feats_df is NULL when every network was dropped via `targets`
           auto_x <- .clean_predictor_matrix(
             cbind(.prep_pca_matrix(other_data),
                   if (!is.null(net_feats_df)) .prep_pca_matrix(net_feats_df)),
-            max_cols = v_budget,
+            max_cols = v_budget_auto,
             ry = ry,
             keep_raw = iso_feats
           )
@@ -955,18 +1271,22 @@ net_diagnostics <- function(mat, directed = NULL) {
               target = v, n_in = ncol(raw_x), budget = v_budget)
           }
           auto_x <- .clean_predictor_matrix(raw_x,
-                                            max_cols = v_budget,
+                                            max_cols = v_budget_auto,
                                             ry = ry,
                                             keep_raw = iso_feats)
         }
+        ovf <- attr(auto_x, "budget_overflow")
+        if (im == 1L && it == 1L && !is.null(ovf)) {
+          budget_notice[[length(budget_notice) + 1L]] <-
+            c(list(target = v), ovf)
+        }
+        attr(auto_x, "budget_overflow") <- NULL
 
-        if (!is.null(model_map[[v]])) {
-          combined_df <- cbind(other_data, net_feats_df)
-          extra <- .model_extra_terms(model_map[[v]], combined_df, ry = ry)
-          x <- cbind(auto_x, extra)
-          x <- x[, !duplicated(colnames(x)), drop = FALSE]
+        x <- if (is.null(extra)) {
+          auto_x
         } else {
-          x <- auto_x
+          xx <- cbind(auto_x, extra)
+          xx[, !duplicated(colnames(xx)), drop = FALSE]
         }
 
         lvls <- var_levels[[v]]
@@ -1026,17 +1346,26 @@ net_diagnostics <- function(mat, directed = NULL) {
         # or non-ties, whichever is rarer - events per variable.
         obs_mask <- ry_nets[[tgt]]
         if (!is.null(struct_eff)) obs_mask <- obs_mask & !struct_eff
-        tie_budget <- .pca_budget(
-          PCA, .pca_denom(cur_mats[[tgt]][obs_mask], NULL,
-                          binary = net_binary[[tgt]]))
+        # PCA_net is NULL when `PCA_networks = "none"` asked for no collapse
+        # at all; .clean_predictor_matrix() reads that as "no cap", and the
+        # other-network PCA inside .build_dyad_data() is capped only by how
+        # many degree terms there are.
+        tie_budget <- if (is.null(PCA_net)) NULL else .pca_budget(
+          PCA_net, .pca_denom(cur_mats[[tgt]][obs_mask], NULL,
+                              binary = net_binary[[tgt]]))
         built <- .build_dyad_data(cur_mats,
                                   cur_data,
                                   target_idx = k,
                                   attr_types = attr_types,
                                   other_net_predictors = if (is.null(sel))
                                     other_net_predictors else "raw",
-                                  n_components = tie_budget,
-                                  structural = struct_eff)
+                                  n_components = if (is.null(tie_budget))
+                                    .Machine$integer.max else tie_budget,
+                                  structural = struct_eff,
+                                  endo_terms = net_endo_terms,
+                                  gw_decay = net_gw_decay,
+                                  undirected = net_undirected[[tgt]],
+                                  binary = net_binary[[tgt]])
         d <- built$data
         ry <- ry_nets[[tgt]][cbind(d$i, d$j)]
         # With a dyad random intercept the fixed `reciprocity` term (the
@@ -1048,34 +1377,76 @@ net_diagnostics <- function(mat, directed = NULL) {
         # the target's endogenous terms and the cross-network dyad terms
         # keep their own coefficients even when the dimensionality
         # safeguard collapses the rest to principal components
-        keep_raw <- c("reciprocity", "twopath",
+        # every endogenous statistic the design could carry, plus the
+        # cross-network cell terms: named coefficients for all of them, never
+        # absorbed into a principal component. Names absent from this target's
+        # design are simply ignored by .clean_predictor_matrix().
+        keep_raw <- c(.ENDO_TERM_NAMES,
                       paste0(rep(setdiff(net_names, tgt), each = 2),
                              c("_tie", "_recip")))
-        if (is.null(sel)) {
-          auto_x <- .clean_predictor_matrix(d[setdiff(names(d), drop_cols)],
-                                             max_cols = tie_budget,
-                                             ry = ry,
-                                             keep_raw = keep_raw)
-        } else {
-          want <- setdiff(unique(c("reciprocity", "twopath", sel$dyad_terms)),
+        sel_cols <- NULL
+        if (!is.null(sel)) {
+          want <- setdiff(unique(c(.ENDO_TERM_NAMES, sel$dyad_terms)),
                           drop_cols)
           sel_cols <- intersect(names(d), want)
-          if (im == 1L && it == 1L && length(sel_cols) > tie_budget) {
+          if (im == 1L && it == 1L && !is.null(tie_budget) &&
+              length(sel_cols) > tie_budget) {
             pca_notice[[length(pca_notice) + 1L]] <- list(
               target = tgt, n_in = length(sel_cols), budget = tie_budget)
           }
-          auto_x <- .clean_predictor_matrix(d[sel_cols],
-                                             max_cols = tie_budget,
-                                             ry = ry,
-                                             keep_raw = keep_raw)
         }
 
-        if (!is.null(model_map[[tgt]])) {
-          extra <- .model_extra_terms(model_map[[tgt]], d, ry = ry)
-          x <- cbind(auto_x, extra)
-          x <- x[, !duplicated(colnames(x)), drop = FALSE]
+        # `models` extras are the user's congeniality requirement, so they are
+        # never collapsed - but they were also never *counted*, a second route
+        # past the events-per-variable rule alongside the `keep_raw` one. They
+        # are now built first and spend the budget, leaving the auto-generated
+        # block to collapse into whatever remains.
+        extra <- if (!is.null(model_map[[tgt]])) {
+          # A formula may name an endogenous term this target does not have:
+          # `twopath` was replaced by `gwesp` for binary targets in 1.1.0, and
+          # `reciprocity` does not exist for an undirected one. Say which and
+          # why, rather than letting model.frame() report "object not found".
+          gone <- setdiff(intersect(all.vars(model_map[[tgt]]),
+                                    .ENDO_TERM_NAMES), names(d))
+          if (length(gone)) {
+            stop("netimpute: the `models` formula for '", tgt, "' names ",
+                 toString(gone), ", which this target does not have. Its ",
+                 "endogenous terms are: ",
+                 toString(intersect(.ENDO_TERM_NAMES, names(d))),
+                 ". Add it with `net_endo_terms` if the target supports it: ",
+                 "the `gw*` change statistics are available for binary ",
+                 "targets only, and an undirected target has no ",
+                 "`reciprocity` term, since there y_ji is y_ij.",
+                 call. = FALSE)
+          }
+          .model_extra_terms(model_map[[tgt]], d, ry = ry)
         } else {
-          x <- auto_x
+          NULL
+        }
+        auto_budget <- if (is.null(tie_budget)) NULL else
+          max(1L, tie_budget - if (is.null(extra)) 0L else ncol(extra))
+        auto_x <- if (is.null(sel)) {
+          .clean_predictor_matrix(d[setdiff(names(d), drop_cols)],
+                                  max_cols = auto_budget, ry = ry,
+                                  keep_raw = keep_raw)
+        } else {
+          .clean_predictor_matrix(d[sel_cols], max_cols = auto_budget,
+                                  ry = ry, keep_raw = keep_raw)
+        }
+        # the protected dyad terms are never collapsed either, so with many
+        # networks they can fill a sparse target's whole budget on their own
+        ovf <- attr(auto_x, "budget_overflow")
+        if (im == 1L && it == 1L && !is.null(ovf)) {
+          budget_notice[[length(budget_notice) + 1L]] <-
+            c(list(target = tgt), ovf)
+        }
+        attr(auto_x, "budget_overflow") <- NULL
+
+        x <- if (is.null(extra)) {
+          auto_x
+        } else {
+          xx <- cbind(auto_x, extra)
+          xx[, !duplicated(colnames(xx)), drop = FALSE]
         }
 
         y <- d$y
@@ -1086,7 +1457,10 @@ net_diagnostics <- function(mat, directed = NULL) {
                                                 mat = cur_mats[[tgt]],
                                                 binary = net_binary[[tgt]],
                                                 donors = donors,
-                                                undirected = net_undirected[[tgt]])
+                                                undirected = net_undirected[[tgt]],
+                                                sweeps = net_sweeps,
+                                                net_ridge = net_ridge,
+                                                gw_decay = net_gw_decay)
         } else {
           if (length(net_random_intercepts)) {
             imp_vals <- .impute_pmm_ranef(y = y,
@@ -1146,8 +1520,11 @@ net_diagnostics <- function(mat, directed = NULL) {
       netImpMean[nm, it] <- st$mean
       netImpVar[nm, it]  <- st$var
     }
-    if (im == 1L && it == 1L && printFlag) {
-      .pca_selection_notice(pca_notice)
+    if (im == 1L && it == 1L) {
+      if (printFlag) .pca_selection_notice(pca_notice)
+      # not gated on printFlag: this one says the fit is weaker than the
+      # `PCA` budget promises, which is not a progress message
+      .budget_overflow_notice(budget_notice)
     }
   }
 
@@ -1517,7 +1894,6 @@ net_diagnostics <- function(mat, directed = NULL) {
 #'   behaviour exactly. `"none"` imposes no budget on attribute models, so
 #'   their predictors keep their own coefficients instead of being collapsed
 #'   to components. A `list(n=, ratio=)` sets an attribute-only budget.
-#'   Tie models always use `PCA`.
 #'
 #'   The two sides are not comparable: an attribute model is budgeted against
 #'   observed *rows*, a tie model against observed *events*, which at typical
@@ -1526,6 +1902,16 @@ net_diagnostics <- function(mat, directed = NULL) {
 #'   deliberately chosen set whose individual coefficients are the point;
 #'   note that it removes the safeguard, so a wide predictor set against few
 #'   observed rows can leave the univariate models near-singular.
+#' @param PCA_networks The same, for the **tie** models: `NULL` (default)
+#'   inherits `PCA`, `"none"` imposes no budget on tie models, and a
+#'   `list(n=, ratio=)` sets a tie-only budget. Added in 1.1.0 - before it,
+#'   only the attribute side could be overridden, which had it backwards.
+#'   The tie models are the ones that run closest to their budget: a network
+#'   target's protected dyad block (its own endogenous statistics plus one
+#'   `_tie`/`_recip` pair per other network) is never collapsed and grows by
+#'   two columns for every additional network, so with many networks and a
+#'   sparse target it can fill the budget on its own. When that happens
+#'   `netmice()` warns; widening `PCA_networks` is the direct remedy.
 #' @param net_random_intercepts `NULL` (default) or a character vector - any
 #'   of `"ego"`, `"alter"`, `"dyad"`. When set, the working model for
 #'   *network-tie* imputation is a linear mixed model fit with
@@ -1681,6 +2067,120 @@ net_diagnostics <- function(mat, directed = NULL) {
 #'   self-reinforcing surplus of random initial ties. `"sample"` restores
 #'   the previous behavior of filling missing cells by resampling observed
 #'   off-diagonal values (marginal-density start).
+#' @param net_ridge Ridge penalty for the **tie** working model under
+#'   `net_update = "gibbs"`: a list with `lambda` and `scale`, either
+#'   `"fixed"` or `"epv"`. A bare number is shorthand for
+#'   `list(lambda = ...)`. New in 1.1.0, and **off by default**
+#'   (`lambda = 0`).
+#'
+#'   It is off by default because the evidence so far says it costs more than
+#'   it buys. On an eight-network dataset the total-budget fix alone brought
+#'   the imputed tie rate to within 2% of truth; adding `lambda = 0.01` on top
+#'   made the level bias slightly worse and cut the imputed networks' node-level
+#'   discrimination sharply (Brier skill 0.17 to 0.04). A ridge shrinks the
+#'   *worst-identified* directions hardest, and on a dyad design that is where
+#'   the between-node signal lives. Raise it only with a measurement in hand.
+#'
+#'   Predictors are standardised on the observed dyads before the penalty is
+#'   applied and mapped back afterwards, so `lambda` is on a common scale
+#'   across a design that mixes 0/1 dyad indicators, principal components and
+#'   attribute differences. Every non-intercept coefficient is penalised,
+#'   including the endogenous and cross-network terms that `PCA` protects from
+#'   collapse; the intercept is not, so the baseline density stays free to
+#'   match the observed rate. `scale = "epv"` multiplies `lambda` by
+#'   predictors-per-event, penalising a thinly identified target harder than a
+#'   well-identified one.
+#'
+#'   The penalty also shrinks the Bayesian coefficient draw, since that draw
+#'   uses the penalised covariance. This is intended - an over-dispersed
+#'   linear predictor inflates the *mean* imputed tie probability wherever
+#'   ties are rare, because `plogis()` is convex below 0.5 - but it does
+#'   reduce between-imputation variance, so a large `lambda` will eventually
+#'   make the imputations improperly narrow. The `simultaneous` updater goes
+#'   through mice's own methods and is unaffected by this argument.
+#' @param net_sweeps Number of Gibbs passes over a network's missing cells per
+#'   visit, under `net_update = "gibbs"` (default `5`). Each pass visits every
+#'   missing cell once, in a fresh random order, conditioning on all ties
+#'   drawn so far.
+#'
+#'   The tie updater is the full-conditional Gibbs sampler of an ERGM whose
+#'   coefficients were estimated by pseudo-likelihood, restricted to the
+#'   missing cells. `net_sweeps` controls how far the network mixes toward the
+#'   distribution those coefficients imply; `maxit` controls the outer MICE
+#'   chain and is where the coefficients are re-estimated. One pass per visit
+#'   (the pre-1.1.0 behaviour, `net_sweeps = 1`) leaves each cell drawn once
+#'   against a state that has barely moved, which is why the per-iteration tie
+#'   density used to drift for many iterations without settling.
+#'
+#'   The coefficients are drawn once per visit and reused across all
+#'   `net_sweeps` passes, so raising it costs sweep time but no extra model
+#'   fits. It also means the predictors for the *observed* dyads go
+#'   progressively staler across passes, since they are computed from the
+#'   partly imputed matrix at the start of the visit - a reason not to set it
+#'   enormously high relative to `maxit`.
+#' @param net_endo_terms Which endogenous (network-derived) statistics the tie
+#'   models may carry. Any of `"reciprocity"`, `"twopath"`, `"gwesp"`,
+#'   `"gwodegree"`, `"gwidegree"`; the default is
+#'   `c("reciprocity", "twopath")`. Set
+#'   `c("reciprocity", "gwesp", "gwodegree", "gwidegree")` for the
+#'   geometrically weighted change statistics.
+#'
+#'   **The `gw*` terms are available but not the default**, on measurement.
+#'   They behave as advertised - `gwesp` pulls the shared-partner count of the
+#'   imputed ties toward truth where the bounded `twopath` indicator
+#'   under-closed - but on the data they were developed against they buy that
+#'   closure by inventing ties, and badly so on sparse networks: at
+#'   density 0.008 the imputed tie rate went from 2.1x truth to 4.3x, maximum
+#'   imputed out-degree from 1.6x the true maximum to 3.0x, and mean Brier
+#'   skill across eight networks from 0.12 to -0.07 (worse than predicting the
+#'   base rate). Raising `net_sweeps` amplifies it, since more Gibbs passes let
+#'   the closure feedback run further.
+#'
+#'   The mechanism is not mysterious. `twopath` is bounded by 1; `gwesp`'s
+#'   change statistic is bounded by `exp(decay) + 2(n - 2)`, a few hundred at
+#'   n = 100. A positive coefficient on a statistic that large is a strong tie
+#'   generator. Try them on denser networks, or with a smaller `net_gw_decay`,
+#'   and check the imputed tie rate against the observed density before
+#'   trusting them.
+#'
+#'   These enter as ERGM **change statistics**: the amount the corresponding
+#'   network statistic would move if that cell went from 0 to 1, evaluated on
+#'   the network with the cell removed. That last part is what makes the
+#'   degree terms leave-one-out - the tie being imputed is never a summand of
+#'   its own predictor - and it is why a hand-rolled `degree + degree^2` pair
+#'   would not work in their place.
+#'
+#'   The request is filtered by what each target can actually support, rather
+#'   than erroring, because `networks` is routinely a mixed list:
+#'
+#'   \tabular{lll}{
+#'     \strong{target} \tab \strong{directed} \tab \strong{undirected} \cr
+#'     binary \tab reciprocity, gwesp, gwodegree, gwidegree \tab gwesp, gwdegree \cr
+#'     weighted \tab reciprocity, twopath \tab twopath
+#'   }
+#'
+#'   An undirected target has no `reciprocity` term because there `y_ji` *is*
+#'   `y_ij`, which makes the column a perfect predictor and separates the
+#'   working model. A weighted target keeps the bounded 0/1 `twopath`
+#'   indicator instead of the `gw*` terms, which are statistics of a *binary*
+#'   ERGM. An undirected binary target gets a single `gwdegree` in place of
+#'   the out/in pair, since one tie raises the degree of both endpoints.
+#'
+#'   A `models` formula naming a term its target does not have is an error
+#'   that says so, and lists the terms that target does have.
+#' @param net_gw_decay Decay parameters for the `gw*` change statistics:
+#'   a list with `esp`, `outdegree` and `indegree`, or a single number used
+#'   for all three. Default `0.69` throughout, i.e. `w = 1 - exp(-decay)` of
+#'   about 0.5, so each additional shared partner or degree step is worth
+#'   roughly half the last. As in standard ERGM practice the decay is fixed
+#'   rather than estimated; values outside roughly `[0.05, 5]` warn, since a
+#'   very small decay collapses the degree terms into an isolate indicator and
+#'   a very large one makes every change statistic near-constant.
+#'
+#'   Note that `gwesp` is bounded only by `exp(decay) + 2(n - 2)`, unlike the
+#'   0/1 `twopath` it replaces, so its linear predictor is clamped inside the
+#'   sweep to keep a large positive coefficient from pinning every probability
+#'   at 0 or 1.
 #' @param ncores Number of parallel workers for the `m` chains via
 #'   \pkg{future} (default 1 = sequential). See Details for the
 #'   installed-package requirement when `ncores > 1`.
@@ -1765,6 +2265,7 @@ netmice <- function(data,
                     other_net_predictors = c("raw", "pca"),
                     PCA = list(n = NULL, ratio = 10),
                     PCA_attributes = NULL,
+                    PCA_networks = NULL,
                     net_random_intercepts = NULL,
                     structural = NULL,
                     net_dependence = NULL,
@@ -1776,6 +2277,11 @@ netmice <- function(data,
                     collin_method = c("pairwise", "vif", "none"),
                     collin_threshold = NULL,
                     net_init = c("zero", "sample"),
+                    net_ridge = list(lambda = 0, scale = "fixed"),
+                    net_sweeps = 5L,
+                    net_endo_terms = c("reciprocity", "twopath"),
+                    net_gw_decay = list(esp = 0.69, outdegree = 0.69,
+                                        indegree = 0.69),
                     net_update = c("gibbs", "simultaneous"),
                     ncores = 1L,
                     seed = NA,
@@ -1788,6 +2294,15 @@ netmice <- function(data,
   other_net_predictors <- match.arg(other_net_predictors)
   PCA <- .validate_pca(PCA)
   PCA_attr <- .resolve_attribute_pca(PCA_attributes, PCA)
+  PCA_net  <- .resolve_network_pca(PCA_networks, PCA)
+  net_ridge <- .validate_net_ridge(net_ridge)
+  if (!is.numeric(net_sweeps) || length(net_sweeps) != 1L ||
+      is.na(net_sweeps) || net_sweeps < 1) {
+    stop("`net_sweeps` must be a single integer >= 1.", call. = FALSE)
+  }
+  net_sweeps <- as.integer(net_sweeps)
+  net_endo_terms <- .validate_endo_terms(net_endo_terms)
+  net_gw_decay <- .validate_gw_decay(net_gw_decay)
   if (!is.null(net_random_intercepts)) {
     net_random_intercepts <- match.arg(net_random_intercepts,
                                        c("ego", "alter", "dyad"),
@@ -2171,12 +2686,17 @@ netmice <- function(data,
       other_net_predictors = other_net_predictors,
       PCA = PCA,
       PCA_attr = PCA_attr,
+      PCA_net = PCA_net,
       net_random_intercepts = net_random_intercepts,
       model_map = model_map,
       qp_pred = if (!is.null(qp)) qp$predictors else NULL,
       feat_clash_names = feat_clash_names,
       net_init = net_init,
       net_update = net_update,
+      net_ridge = net_ridge,
+      net_sweeps = net_sweeps,
+      net_endo_terms = net_endo_terms,
+      net_gw_decay = net_gw_decay,
       net_binary = net_binary,
       net_undirected = net_undirected,
       maxit = maxit,
@@ -2253,6 +2773,12 @@ netmice <- function(data,
       net_init = net_init,
       net_update = net_update,
       PCA = PCA,
+      PCA_attributes = PCA_attr,
+      PCA_networks = PCA_net,
+      net_ridge = net_ridge,
+      net_sweeps = net_sweeps,
+      net_endo_terms = net_endo_terms,
+      net_gw_decay = net_gw_decay,
       ncores = ncores,
       imp = imp_data,
       imp_nets = imp_nets,

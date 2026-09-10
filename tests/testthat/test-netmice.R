@@ -253,8 +253,9 @@ test_that("netmice: net_random_intercepts without an explicit net_update falls b
 
 test_that("netmice: other_net_predictors = 'pca' runs end to end", {
   fx <- make_missing_fixture()
-  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, other_net_predictors = "pca",
-                  PCA = list(n = 2), printFlag = FALSE)
+  fit <- suppress_budget_overflow(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 2, other_net_predictors = "pca",
+            PCA = list(n = 2), printFlag = FALSE))
   expect_s3_class(fit, "netmids")
   off <- which(row(fx$nets$friends) != col(fx$nets$friends))
   expect_false(anyNA(fit$imp_nets[[1]]$friends[off]))
@@ -272,8 +273,9 @@ test_that("netmice: models - attribute formula with an interaction is honoured",
 
 test_that("netmice: models - network dyad-level formula is honoured", {
   fx <- make_missing_fixture()
-  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, printFlag = FALSE,
-                  models = list("friends ~ age_absdiff + advice_tie + reciprocity"))
+  fit <- suppress_budget_overflow(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 2, printFlag = FALSE,
+            models = list("friends ~ age_absdiff + advice_tie + reciprocity")))
   off <- which(row(fx$nets$friends) != col(fx$nets$friends))
   expect_false(anyNA(fit$imp_nets[[1]]$friends[off]))
 })
@@ -327,17 +329,17 @@ test_that("netmice: models - network formula with interactions of internal terms
   # an ego attribute x the target's own reciprocity, and a cross-network
   # tie x an attribute-similarity term: every internally created dyad-level
   # column is interactable via model.matrix()
-  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, printFlag = FALSE,
-                  models = list("friends ~ age_ego:reciprocity + advice_tie:age_absdiff"))
+  fit <- suppress_budget_overflow(netmice(fx$attrs, fx$nets, m = 1, maxit = 2, printFlag = FALSE,
+                  models = list("friends ~ age_ego:reciprocity + advice_tie:age_absdiff")))
   off <- which(row(fx$nets$friends) != col(fx$nets$friends))
   expect_false(anyNA(fit$imp_nets[[1]]$friends[off]))
 })
 
 test_that("netmice: models - endogenous interaction under net_update = 'gibbs'", {
   fx <- make_missing_fixture()
-  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2, net_update = "gibbs",
+  fit <- suppress_budget_overflow(netmice(fx$attrs, fx$nets, m = 1, maxit = 2, net_update = "gibbs",
                   seed = 9, printFlag = FALSE,
-                  models = list("friends ~ age_ego:reciprocity + reciprocity:twopath"))
+                  models = list("friends ~ age_ego:reciprocity + reciprocity:twopath")))
   off <- which(row(fx$nets$friends) != col(fx$nets$friends))
   friends_done <- fit$imp_nets[[1]]$friends
   expect_false(anyNA(friends_done[off]))
@@ -357,12 +359,27 @@ test_that(".gibbs_endo_interactions: decomposes endogenous interaction columns",
   expect_named(info, c("age_ego:reciprocity", "reciprocity:twopath"))
   ar <- info[["age_ego:reciprocity"]]
   expect_equal(ar$col, 2L)
-  expect_true(ar$recip)
-  expect_false(ar$twop)
+  expect_identical(ar$endo, "reciprocity")
   expect_equal(ar$static, c(1, 2, 3, 4))
   rt <- info[["reciprocity:twopath"]]
-  expect_true(rt$recip && rt$twop)
+  expect_identical(rt$endo, c("reciprocity", "twopath"))
   expect_equal(rt$static, rep(1, 4))
+})
+
+test_that(".gibbs_endo_interactions: the endogenous name set is configurable", {
+  d <- data.frame(age_ego = c(1, 2, 3, 4),
+                  reciprocity = c(0, 1, 0, 1),
+                  gwesp = c(0.5, 1.5, 0.5, 1.5),
+                  gwodegree = c(0.2, 0.4, 0.2, 0.4))
+  xn <- c("age_ego:gwesp", "age_ego:reciprocity:gwodegree", "age_ego:twopath")
+  info <- netimpute:::.gibbs_endo_interactions(
+    xn, d, endo_names = c("reciprocity", "gwesp", "gwodegree"))
+  # `twopath` is not in the active set here, so that column is left static
+  expect_named(info, c("age_ego:gwesp", "age_ego:reciprocity:gwodegree"))
+  # a three-way interaction carries both endogenous factors, no extra code
+  expect_identical(info[["age_ego:reciprocity:gwodegree"]]$endo,
+                   c("reciprocity", "gwodegree"))
+  expect_equal(info[["age_ego:gwesp"]]$static, c(1, 2, 3, 4))
 })
 
 test_that(".impute_ties_gibbs: endogenous interaction columns keep the bookkeeping consistent", {
@@ -395,10 +412,10 @@ test_that("netmice: `targets` never drops a network/attribute a models formula d
   # advice and age have missing data and are not targets, but the friends
   # formula references advice_tie and age_ego - both must be kept (before
   # the derived-name protection this errored with "could not evaluate")
-  fit <- suppressMessages(
+  fit <- suppressMessages(suppress_budget_overflow(
     netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE,
             targets = "friends",
-            models = list("friends ~ advice_tie:age_ego")))
+            models = list("friends ~ advice_tie:age_ego"))))
   expect_true("advice" %in% names(fit$imp_nets[[1]]))
   expect_true("age" %in% names(fit$imp[[1]]))
   expect_false(anyNA(fit$imp_nets[[1]]$advice[off]))
@@ -517,8 +534,8 @@ test_that("netmice: structural - a single matrix fixes the same cells at zero in
                          structural = s, fit = FALSE)
   expect_equal(nrow(res$data), sum(off) - sum(s & off))
 
-  fit <- netmice(fx$attrs, fx$nets, m = 2, maxit = 2, structural = s,
-                 seed = 11, printFlag = FALSE)
+  fit <- suppress_budget_overflow(netmice(fx$attrs, fx$nets, m = 2, maxit = 2, structural = s,
+                 seed = 11, printFlag = FALSE))
   expect_s3_class(fit, "netmids")
   for (im in 1:2) {
     # structural cells stay exactly zero (including the NA-coded ones) ...
@@ -545,9 +562,9 @@ test_that("netmice: structural - a named list applies different fixed-zero cells
   # networks are imputed
   fx$nets$advice[sample(which(offm & !s_advice), 20)] <- NA
 
-  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 2,
+  fit <- suppress_budget_overflow(netmice(fx$attrs, fx$nets, m = 1, maxit = 2,
                  structural = list(friends = s_friends, advice = s_advice),
-                 seed = 12, printFlag = FALSE)
+                 seed = 12, printFlag = FALSE))
   # each network honours its own structural pattern
   expect_true(all(fit$imp_nets[[1]]$friends[s_friends & offm] == 0))
   expect_true(all(fit$imp_nets[[1]]$advice[s_advice & offm] == 0))
@@ -872,8 +889,8 @@ test_that("netmice: a misclassified directed network would lose reciprocity_rati
 test_that("netmice: runs end to end on a network whose filled state is symmetric", {
   m <- pathological_directed()
   attrs <- data.frame(age = c(1, NA, 3, 4, NA, 6))
-  fit <- netmice(attrs, list(x = m), m = 1, maxit = 2, seed = 1,
-                 printFlag = FALSE)
+  fit <- suppress_budget_overflow(netmice(attrs, list(x = m), m = 1, maxit = 2, seed = 1,
+                 printFlag = FALSE))
   out <- complete_netmice(fit, 1)$networks$x
   obs <- !is.na(m) & (row(m) != col(m))
   expect_equal(out[obs], m[obs])       # observed ties untouched
@@ -906,8 +923,8 @@ test_that("netmice: a network with exactly ONE missing tie leaves every observed
   diag(m) <- 0
   attrs <- data.frame(age = c(1, NA, 3, 4, NA, 6))
   for (upd in c("gibbs", "simultaneous")) {
-    fit <- netmice(attrs, list(x = m), m = 1, maxit = 2, seed = 1,
-                   net_update = upd, printFlag = FALSE)
+    fit <- suppress_budget_overflow(netmice(attrs, list(x = m), m = 1, maxit = 2, seed = 1,
+                   net_update = upd, printFlag = FALSE))
     out <- complete_netmice(fit, 1)$networks$x
     obs <- !is.na(m) & (row(m) != col(m))
     expect_equal(out[obs], m[obs], info = upd)   # observed ties untouched
@@ -936,4 +953,276 @@ test_that(".init_fill_vector: a single observed value is used, not 1:value", {
   x <- c(NA, NA, 7, NA)
   set.seed(1)
   expect_equal(netimpute:::.init_fill_vector(x), c(7, 7, 7, 7))
+})
+
+test_that(".validate_net_ridge: accepts a list or a bare number, rejects the rest", {
+  expect_equal(netimpute:::.validate_net_ridge(NULL),
+               list(lambda = 0, scale = "fixed"))
+  expect_equal(netimpute:::.validate_net_ridge(0.05),
+               list(lambda = 0.05, scale = "fixed"))
+  expect_equal(netimpute:::.validate_net_ridge(list(lambda = 0.1, scale = "epv")),
+               list(lambda = 0.1, scale = "epv"))
+  expect_error(netimpute:::.validate_net_ridge(list(lambda = -1)),
+               "non-negative")
+  expect_error(netimpute:::.validate_net_ridge(list(scale = "sqrt")),
+               "fixed")
+  expect_error(netimpute:::.validate_net_ridge(list(lam = 1)), "may only contain")
+})
+
+test_that(".net_ridge_lambda: 'epv' scales with predictors per event", {
+  fixed <- list(lambda = 0.02, scale = "fixed")
+  epv   <- list(lambda = 0.02, scale = "epv")
+  expect_equal(netimpute:::.net_ridge_lambda(fixed, p = 30, events = 100), 0.02)
+  # thin design (30 predictors, 100 events) penalised harder than a fat one
+  expect_equal(netimpute:::.net_ridge_lambda(epv, p = 30, events = 100),
+               0.02 * 30 / 100)
+  expect_gt(netimpute:::.net_ridge_lambda(epv, p = 30, events = 100),
+            netimpute:::.net_ridge_lambda(epv, p = 30, events = 1000))
+  # disabled, or nothing to penalise
+  expect_equal(netimpute:::.net_ridge_lambda(list(lambda = 0, scale = "epv"),
+                                             p = 30, events = 100), 0)
+  expect_equal(netimpute:::.net_ridge_lambda(epv, p = 0, events = 100), 0)
+})
+
+test_that(".fit_tie_model: the ridge shrinks the coefficients toward zero", {
+  set.seed(31)
+  n <- 400
+  x <- matrix(rnorm(n * 12), n, 12, dimnames = list(NULL, paste0("v", 1:12)))
+  eta <- -2 + x[, 1] * 1.2 - x[, 2] * 0.8
+  y <- rbinom(n, 1, plogis(eta))
+  ry <- rep(c(TRUE, FALSE), each = n / 2)
+
+  set.seed(1); none <- netimpute:::.fit_tie_model(
+    x, y, ry, binary = TRUE, net_ridge = list(lambda = 0, scale = "fixed"))
+  set.seed(1); mild <- netimpute:::.fit_tie_model(
+    x, y, ry, binary = TRUE, net_ridge = list(lambda = 5, scale = "fixed"))
+
+  expect_lt(sum(abs(mild$beta)), sum(abs(none$beta)))
+  # the intercept is NOT penalised, so the baseline rate survives shrinkage
+  expect_lt(abs(mild$intercept - qlogis(mean(y[ry]))), 1)
+  expect_named(none$beta, colnames(x))
+  expect_length(none$fitted_obs, sum(ry))
+})
+
+test_that(".fit_tie_model: the standardise/back-transform round trip is exact", {
+  # The fit happens on standardised columns and the coefficients are mapped
+  # back to the raw scale afterwards. The property that pins that mapping is
+  # scale invariance: rescaling and shifting an input column must leave the
+  # linear predictor untouched, with the coefficient absorbing the change.
+  # A botched back-transform breaks this immediately.
+  set.seed(32)
+  n <- 300
+  x <- matrix(rnorm(n * 4), n, 4, dimnames = list(NULL, paste0("v", 1:4)))
+  y <- rbinom(n, 1, plogis(-1 + x[, 1] * 0.9))
+  ry <- rep(c(TRUE, FALSE), each = n / 2)
+
+  xs <- x
+  xs[, 2] <- xs[, 2] * 100      # rescaled
+  xs[, 3] <- xs[, 3] + 7        # shifted
+
+  for (lam in c(0, 0.5)) {
+    rg <- list(lambda = lam, scale = "fixed")
+    set.seed(9); a <- netimpute:::.fit_tie_model(x,  y, ry, TRUE, rg)
+    set.seed(9); b <- netimpute:::.fit_tie_model(xs, y, ry, TRUE, rg)
+    expect_equal(a$fitted_obs, b$fitted_obs)
+    expect_equal(b$beta[["v2"]], a$beta[["v2"]] / 100)
+    expect_equal(b$beta[["v3"]], a$beta[["v3"]])
+    expect_equal(b$intercept, a$intercept - 7 * a$beta[["v3"]])
+  }
+
+  # fitted_obs really is the returned coefficients applied to the raw columns
+  set.seed(9)
+  f <- netimpute:::.fit_tie_model(x, y, ry, TRUE, list(lambda = 0.5, scale = "fixed"))
+  expect_equal(f$fitted_obs,
+               drop(f$intercept + x[ry, , drop = FALSE] %*% f$beta))
+})
+
+test_that("netmice: net_ridge is validated, recorded, and changes the ties", {
+  fx <- make_missing_fixture()
+  expect_error(netmice(fx$attrs, fx$nets, m = 1, maxit = 1,
+                       net_ridge = list(lambda = -2), printFlag = FALSE),
+               "non-negative")
+
+  off <- which(row(fx$nets$friends) != col(fx$nets$friends))
+  a <- suppress_budget_overflow(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 2, seed = 3,
+            net_ridge = list(lambda = 0), printFlag = FALSE))
+  b <- suppress_budget_overflow(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 2, seed = 3,
+            net_ridge = list(lambda = 50, scale = "epv"), printFlag = FALSE))
+  expect_equal(a$net_ridge, list(lambda = 0, scale = "fixed"))
+  expect_equal(b$net_ridge, list(lambda = 50, scale = "epv"))
+  # both must produce a complete, binary network; whether the two disagree on
+  # any particular cell is a coin flip on a fixture this small, so the
+  # shrinkage itself is asserted at .fit_tie_model() level instead
+  for (fit in list(a, b)) {
+    net <- complete_netmice(fit, 1)$networks$friends
+    expect_false(anyNA(net[off]))
+    expect_true(all(net[off] %in% c(0, 1)))
+  }
+})
+
+test_that(".fit_tie_model: a separable design does not saturate the sweep", {
+  # Regression test. A rare outcome with many predictors - the normal regime
+  # for a sparse tie model carrying its whole protected dyad block - is
+  # separable, and a plain IRLS diverges there: mu hits the boundary, the
+  # working response (y - mu)/w explodes, and every missing cell is then
+  # drawn as a certain 0 or a certain 1. The clamp plus step-halving is what
+  # keeps the linear predictor finite.
+  set.seed(77)
+  n <- 600; p <- 80                     # p large relative to the ~16 events
+  x <- matrix(rnorm(n * p), n, p, dimnames = list(NULL, paste0("v", 1:p)))
+  y <- rbinom(n, 1, 0.03)
+  ry <- rep(c(TRUE, FALSE), each = n / 2)
+
+  # At lambda = 0 the likelihood genuinely has no maximum under complete
+  # separation, so large coefficients are the correct answer and glm() gives
+  # them too; all that is required there is that nothing is non-finite.
+  for (lam in c(0, 0.01, 1)) {
+    set.seed(5)
+    f <- netimpute:::.fit_tie_model(x, y, ry, TRUE,
+                                    list(lambda = lam, scale = "fixed"))
+    eta <- f$intercept + drop(x %*% f$beta)
+    expect_true(all(is.finite(eta)))
+    expect_true(all(is.finite(f$beta)))
+  }
+  # A penalty that actually bites must pull the fitted probabilities off the
+  # {0, 1} boundary -- that is what stops the sweep drawing every missing
+  # cell as a certainty.
+  sat <- function(lam) {
+    set.seed(5)
+    f <- netimpute:::.fit_tie_model(x, y, ry, TRUE,
+                                    list(lambda = lam, scale = "fixed"))
+    pr <- plogis(f$intercept + drop(x %*% f$beta))
+    mean(pr > 1 - 1e-6 | pr < 1e-6)
+  }
+  expect_lt(sat(1), sat(0.1))
+  expect_lt(sat(0.1), sat(0))
+  expect_lt(sat(1), 0.1)
+})
+
+test_that(".fit_tie_model: lambda is dimensionless and monotone in shrinkage", {
+  # The penalty is scaled by the information in the data, so `lambda` means
+  # roughly the same amount of shrinkage regardless of sample size. Without
+  # that scaling the diagonal of X'WX runs to hundreds on a dyad design and
+  # a lambda of 0.01 would be an exact no-op.
+  set.seed(91)
+  mk <- function(n) {
+    x <- matrix(rnorm(n * 20), n, 20, dimnames = list(NULL, paste0("v", 1:20)))
+    list(x = x, y = rbinom(n, 1, plogis(-3 + x[, 1])),
+         ry = rep(c(TRUE, FALSE), each = n / 2))
+  }
+  spread <- function(d, lam) {
+    set.seed(6)
+    f <- netimpute:::.fit_tie_model(d$x, d$y, d$ry, TRUE,
+                                    list(lambda = lam, scale = "fixed"))
+    stats::sd(f$beta)
+  }
+  d <- mk(2000)
+  expect_gt(spread(d, 0), spread(d, 0.5))
+  expect_gt(spread(d, 0.5), spread(d, 5))
+
+  # doubling n must not wash the penalty out
+  small <- mk(1000); big <- mk(4000)
+  r_small <- spread(small, 2) / spread(small, 0)
+  r_big   <- spread(big, 2) / spread(big, 0)
+  expect_lt(abs(r_small - r_big), 0.35)
+})
+
+test_that("net_sweeps: K passes leave observed cells alone and keep the bookkeeping exact", {
+  set.seed(11)
+  n <- 15
+  m <- matrix(rbinom(n * n, 1, 0.2), n, n); diag(m) <- 0
+  mis <- sample(which(row(m) != col(m)), 60)
+  m[mis] <- NA
+  attrs <- data.frame(age = rnorm(n), grade = rnorm(n))
+  filled <- netimpute:::.init_fill_matrix(m, init = "zero")
+  built <- suppressMessages(netimpute:::.build_dyad_data(list(net = filled), attrs, 1))
+  d <- built$data
+  ry <- !is.na(m)[cbind(d$i, d$j)]
+  x <- netimpute:::.clean_predictor_matrix(
+    d[setdiff(names(d), c("i", "j", "y"))], ry = ry)
+  obs <- !is.na(m) & (row(m) != col(m))
+  for (K in c(1L, 3L, 10L)) {
+    out <- netimpute:::.impute_ties_gibbs(d = d, ry = ry, x = x, mat = filled,
+                                          binary = TRUE, donors = 5,
+                                          sweeps = K, check = TRUE)
+    expect_identical(out[obs], m[obs])
+    expect_true(all(out[mis] %in% c(0, 1)))
+  }
+})
+
+test_that("net_sweeps: K = 1 reproduces the single-pass result exactly", {
+  set.seed(12)
+  n <- 14
+  m <- matrix(rbinom(n * n, 1, 0.25), n, n); diag(m) <- 0
+  m[sample(which(row(m) != col(m)), 40)] <- NA
+  attrs <- data.frame(age = rnorm(n))
+  filled <- netimpute:::.init_fill_matrix(m, init = "zero")
+  built <- suppressMessages(netimpute:::.build_dyad_data(list(net = filled), attrs, 1))
+  d <- built$data
+  ry <- !is.na(m)[cbind(d$i, d$j)]
+  x <- netimpute:::.clean_predictor_matrix(
+    d[setdiff(names(d), c("i", "j", "y"))], ry = ry)
+  set.seed(99); a <- netimpute:::.impute_ties_gibbs(d, ry, x, filled, TRUE, 5,
+                                                    sweeps = 1L)
+  set.seed(99); b <- netimpute:::.impute_ties_gibbs(d, ry, x, filled, TRUE, 5)
+  expect_identical(a, b)   # sweeps = 1 is the documented default of the worker
+})
+
+test_that("net_sweeps: undirected targets stay symmetric across K passes", {
+  fx <- make_undirected_fixture()
+  fit <- netmice(fx$attrs, list(friends = fx$net), m = 1, maxit = 2, seed = 4,
+                 net_sweeps = 4L, printFlag = FALSE)
+  net <- complete_netmice(fit, 1)$networks[[1]]
+  expect_true(isSymmetric(unname(net)))
+  expect_false(anyNA(net))
+})
+
+test_that("netmice: net_sweeps is validated and recorded", {
+  fx <- make_missing_fixture()
+  expect_error(netmice(fx$attrs, fx$nets, m = 1, maxit = 1, net_sweeps = 0,
+                       printFlag = FALSE), "net_sweeps")
+  expect_error(netmice(fx$attrs, fx$nets, m = 1, maxit = 1, net_sweeps = c(2, 3),
+                       printFlag = FALSE), "net_sweeps")
+  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 1, net_sweeps = 3,
+                 printFlag = FALSE)
+  expect_identical(fit$net_sweeps, 3L)
+  # the default is 5, not the worker-level default of 1
+  fit0 <- netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE)
+  expect_identical(fit0$net_sweeps, 5L)
+})
+
+test_that("netmice: a models formula may interact a gw term when it is enabled", {
+  fx <- make_missing_fixture()
+  gw <- c("reciprocity", "gwesp", "gwodegree", "gwidegree")
+  fit <- suppress_budget_overflow(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 2, net_update = "gibbs", seed = 9,
+            printFlag = FALSE, net_endo_terms = gw,
+            models = list("friends ~ age_ego:gwesp + gwodegree:gwesp")))
+  off <- which(row(fx$nets$friends) != col(fx$nets$friends))
+  done <- fit$imp_nets[[1]]$friends
+  expect_false(anyNA(done[off]))
+  expect_true(all(done %in% c(0, 1)))
+})
+
+test_that("netmice: naming an unavailable endogenous term errors informatively", {
+  fx <- make_missing_fixture()
+  # gwesp is not in the default term set, so the formula cannot be evaluated;
+  # the message must name the term, list what IS available, and say why
+  expect_error(
+    netmice(fx$attrs, fx$nets, m = 1, maxit = 1, printFlag = FALSE,
+            models = list("friends ~ reciprocity:gwesp")),
+    "names gwesp.*Its endogenous terms are.*reciprocity, twopath")
+  # `advice` is the weighted target: the gw terms never apply to it, even
+  # when they are switched on. It needs missing cells first, or netmice
+  # never visits it and the formula is never evaluated.
+  fx2 <- fx
+  off2 <- which(row(fx2$nets$advice) != col(fx2$nets$advice))
+  set.seed(3); fx2$nets$advice[sample(off2, 20)] <- NA
+  expect_error(
+    netmice(fx2$attrs, fx2$nets, m = 1, maxit = 1, printFlag = FALSE,
+            net_endo_terms = c("reciprocity", "gwesp", "gwodegree", "gwidegree"),
+            models = list("advice ~ reciprocity:gwesp")),
+    "binary")
 })

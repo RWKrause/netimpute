@@ -59,3 +59,16 @@ fx_nets <- function(n = 24) {
     trust_signed   = fx_signed(n)
   )
 }
+
+# The fixtures here are deliberately tiny (n ~ 20-25, two to four networks),
+# so a tie model's events-per-variable budget is often 1-3 columns while the
+# protected dyad block is 4 or more. That is a genuine over-budget fit and
+# .budget_overflow_notice() is right to warn about it - but it is not what
+# these tests are checking, so muffle just that one classed warning and let
+# every other warning through.
+suppress_budget_overflow <- function(expr) {
+  withCallingHandlers(
+    expr,
+    netimpute_budget_overflow = function(w) invokeRestart("muffleWarning")
+  )
+}

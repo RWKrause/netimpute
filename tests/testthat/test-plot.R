@@ -7,8 +7,12 @@ make_plot_fixture <- function(n = 20, seed = 601, m = 2, maxit = 3) {
   attrs$dept[sample(n, 2)] <- NA
   off <- which(row(friends) != col(friends))
   friends[sample(off, 10)] <- NA
-  netmice(attrs, list(friends = friends, advice = advice), m = m, maxit = maxit,
-          printFlag = FALSE, seed = seed)
+  # a 2-network fixture this small has a tie budget of a couple of columns
+  # against a 6-column protected dyad block, so the over-budget warning is
+  # expected here and is not what these tests are about
+  suppress_budget_overflow(
+    netmice(attrs, list(friends = friends, advice = advice), m = m,
+            maxit = maxit, printFlag = FALSE, seed = seed))
 }
 
 test_that("netmice()'s default maxit is 20", {
@@ -118,8 +122,9 @@ test_that("netmice(): no missing ties gives zero-row imputed arrays that still p
   friends <- fx_bin_directed(n = n, seed = 91)   # complete, no NAs
   attrs <- fx_attrs(n = n, seed = 9)["age"]
   attrs$age[sample(n, 3)] <- NA
-  fit <- netmice(attrs, list(friends = friends), m = 2, maxit = 2,
-                 printFlag = FALSE, seed = 9)
+  fit <- suppress_budget_overflow(
+    netmice(attrs, list(friends = friends), m = 2, maxit = 2,
+            printFlag = FALSE, seed = 9))
   expect_length(fit$net_missing, 0)
   expect_equal(dim(fit$netImpMean), c(0L, 2L, 2L))
   path <- tempfile(fileext = ".png")

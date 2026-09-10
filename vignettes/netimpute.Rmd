@@ -244,6 +244,24 @@ interaction is re-read from the live network after **every single tie draw**,
 not held at its value from the start of the visit — which is what makes an
 endogenous interaction meaningful here.
 
+That sweep over the missing cells is repeated `net_sweeps` times per visit
+(default 5), each pass in a fresh random order and conditioning on every tie
+drawn so far. The working model is fitted once per visit and its coefficients
+reused across the passes, so `net_sweeps` controls how far the network mixes
+toward the distribution those coefficients imply, while `maxit` controls the
+outer chain and is where they are re-estimated.
+
+The endogenous terms themselves are configurable with `net_endo_terms`.
+Alongside `reciprocity` and the bounded `twopath` indicator, binary targets
+can use the geometrically weighted ERGM change statistics `gwesp`,
+`gwodegree` and `gwidegree` — each the movement in the corresponding network
+statistic if the cell went from 0 to 1, evaluated with that cell removed, so
+the degree terms cannot include the tie being imputed in their own predictor.
+They are off by default: `twopath` is bounded by 1 while `gwesp` is bounded by
+`exp(decay) + 2(n - 2)`, and on sparse networks a positive coefficient on it
+generates far too many ties. Check the imputed tie rate against the observed
+density before adopting them.
+
 ## Leaner models
 
 By default every attribute and every network feature is a candidate predictor,

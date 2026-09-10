@@ -99,6 +99,147 @@
   mats
 }
 
+# Every endogenous statistic a tie model can carry. Which of them a given
+# target actually gets is decided by .resolve_endo_terms(); the full list is
+# needed in several places (protecting them from the PCA collapse, telling a
+# user that a `models` formula named one this target does not have).
+.ENDO_TERM_NAMES <- c("reciprocity", "twopath", "gwesp", "gwodegree",
+                      "gwidegree", "gwdegree")
+
+#' Binarize a target matrix for the endogenous statistics
+#'
+#' The endogenous terms are change statistics of a *binary* ERGM, so they are
+#' computed on the presence/absence pattern rather than on tie weights. Before
+#' 1.1.0 the two-path count was formed as `target_mat %*% target_mat` on the
+#' raw matrix and only then thresholded, which happened to give the right
+#' indicator for a binary target but silently gave a weighted matrix's squared
+#' weights - and propagated a single `NA` across a whole row and column.
+#' Unobserved cells count as absent: inside `netmice()` the matrix is always
+#' filled before this is reached, but `dyad_regression()` is exported and does
+#' receive matrices with `NA`.
+#' @noRd
+.binarize_target <- function(mat) {
+  b <- (!is.na(mat) & mat != 0) * 1
+  diag(b) <- 0
+  b
+}
+
+#' ERGM change statistics for every dyad of a binary network
+#'
+#' The change statistic of cell (i, j) is the amount the network statistic
+#' would move if that cell went from 0 to 1, holding every other cell fixed.
+#' It is evaluated on the network with (i, j) *removed*, which is what makes
+#' the degree terms leave-one-out by construction - the outcome is never a
+#' summand of its own predictor - and is the reason the exponents below
+#' subtract `b = B[i, j]`.
+#'
+#' With `w = 1 - exp(-decay)`:
+#' \itemize{
+#'   \item `gwodegree(i,j) = w^(outdeg_i - b)`
+#'   \item `gwidegree(i,j) = w^(indeg_j - b)`
+#'   \item `gwesp(i,j) = exp(a) (1 - w^ESP_ij)`
+#'     `+ sum_{k: B[i,k] & B[j,k]} w^(ESP_ik - b)`
+#'     `+ sum_{k: B[k,j] & B[k,i]} w^(ESP_kj - b)`
+#' }
+#' where `ESP` is the directed (transitive, "OTP") shared-partner count
+#' `B %*% B`. The direct term is the edge's own contribution; the two sums are
+#' the existing edges whose shared-partner count rises when `i -> j` appears.
+#' `ESP_ij` itself needs no correction: cell (i, j) can enter `sum_k B[i,k]
+#' B[k,j]` only through a diagonal entry, and the diagonal is zero.
+#'
+#' Both degree statistics are bounded in (0, 1]. `gwesp` is bounded by
+#' `exp(decay) + 2(n - 2)`, i.e. by a quantity that grows with the network -
+#' unlike the 0/1 `twopath` indicator it replaces. That is why the sweep
+#' clamps its linear predictor.
+#'
+#' For an undirected (symmetric) `B` the same OTP expression is the undirected
+#' ESP change statistic, so no separate branch is needed. The degree side does
+#' differ: adding an undirected tie raises the degree of *both* endpoints, so
+#' the undirected `gwdegree` is the sum of the two directed terms, not a
+#' rename of either (see `.build_dyad_data()`).
+#'
+#' @param B binarized adjacency, zero diagonal.
+#' @param decay list with `esp`, `outdegree`, `indegree`.
+#' @return list of n x n matrices plus the `Tp`, `od`, `id` state the
+#'   sequential sweep seeds itself from.
+#' @noRd
+.ergm_change_stats <- function(B, decay) {
+  n <- nrow(B)
+  Tp <- B %*% B
+  od <- rowSums(B)
+  id <- colSums(B)
+
+  w_esp <- 1 - exp(-decay$esp)
+  w_od  <- 1 - exp(-decay$outdegree)
+  w_id  <- 1 - exp(-decay$indegree)
+
+  Gwod <- w_od^(matrix(od, n, n) - B)
+  Gwid <- w_id^(matrix(id, n, n, byrow = TRUE) - B)
+
+  Wtp  <- w_esp^Tp
+  # the -1 exponent is read only where B[i,j] = 1, and there the shared
+  # partner being counted is reached through the (i,j) tie itself, so the
+  # true exponent is >= 1; pmax() only guards entries that are never used.
+  # Dividing by w_esp instead would be Inf at decay = 0.
+  Wtp1 <- w_esp^pmax(Tp - 1, 0)
+  M    <- B * Wtp
+  M1   <- B * Wtp1
+  tB   <- t(B)
+  P0 <- M  %*% tB       # sum_k B[i,k] B[j,k] w^ESP_ik
+  P1 <- M1 %*% tB
+  Q0 <- tB %*% M        # sum_k B[k,i] B[k,j] w^ESP_kj
+  Q1 <- tB %*% M1
+  edge <- B == 1
+  Gwesp <- exp(decay$esp) * (1 - Wtp) +
+    ifelse(edge, P1, P0) + ifelse(edge, Q1, Q0)
+  diag(Gwesp) <- 0
+  diag(Gwod) <- 0
+  diag(Gwid) <- 0
+
+  list(gwesp = Gwesp, gwodegree = Gwod, gwidegree = Gwid,
+       gwdegree = Gwod + Gwid, Tp = Tp, od = od, id = id)
+}
+
+#' Which endogenous terms a given target actually gets
+#'
+#' Two restrictions, both closing latent problems rather than adding policy:
+#' \itemize{
+#'   \item `reciprocity` is dropped for an **undirected** target, where `y_ji`
+#'     *is* `y_ij`. The column is a perfect predictor there and the working
+#'     model separates on it; it survived only because the fit warning was
+#'     suppressed and the resulting `chol()` failure tolerated. There is
+#'     precedent: a `"dyad"` random intercept already drops it.
+#'   \item The `gw*` terms are dropped for a **weighted** target. They are
+#'     change statistics of a binary ERGM, so on a weighted network they would
+#'     describe a binarization that is not the quantity being modelled, and
+#'     the PMM donor step would match a live linear predictor that can swing
+#'     by O(n) against fitted values frozen at fit time.
+#' }
+#' A weighted or undirected target therefore keeps the bounded `twopath`
+#' indicator as its closure term, which is why `twopath` is retained in the
+#' package rather than removed outright.
+#' @noRd
+.resolve_endo_terms <- function(endo_terms, binary, undirected) {
+  gw <- c("gwesp", "gwodegree", "gwidegree", "gwdegree")
+  out <- endo_terms
+  if (undirected) out <- setdiff(out, "reciprocity")
+  if (!binary) {
+    out <- setdiff(out, gw)
+    if (!"twopath" %in% out && any(endo_terms %in% gw)) out <- c(out, "twopath")
+  }
+  if (undirected && binary) {
+    # one tie, two endpoints: the undirected degree term is the sum of the
+    # directed pair, not either of them renamed
+    if (any(c("gwodegree", "gwidegree") %in% out)) {
+      out <- setdiff(out, c("gwodegree", "gwidegree"))
+      out <- c(out, "gwdegree")
+    }
+  } else {
+    out <- setdiff(out, "gwdegree")
+  }
+  unique(out)
+}
+
 #' Build the dyad-level (cell-level) design matrix for one target network
 #'
 #' @param mats named list of adjacency matrices (all n x n, same node order)
@@ -119,7 +260,12 @@
                              attr_types = NULL,
                              other_net_predictors = c("raw", "pca"),
                              n_components = 3,
-                             structural = NULL) {
+                             structural = NULL,
+                             endo_terms = c("reciprocity", "twopath"),
+                             gw_decay = list(esp = 0.69, outdegree = 0.69,
+                                             indegree = 0.69),
+                             undirected = FALSE,
+                             binary = TRUE) {
   other_net_predictors <- match.arg(other_net_predictors)
   net_names <- names(mats)
   n <- nrow(mats[[1]])
@@ -144,8 +290,30 @@
   base <- base[keep, ]
 
   y <- as.vector(target_mat)[keep]
-  recip <- as.vector(t(target_mat))[keep]
-  twopath <- as.vector(target_mat %*% target_mat)[keep]
+
+  # The endogenous terms are statistics of the binary tie pattern, so they are
+  # built from a binarized, NA-safe copy rather than from the raw (possibly
+  # weighted) matrix. Which of them a target gets depends on whether it is
+  # binary and whether it is undirected - see .resolve_endo_terms().
+  B_target <- .binarize_target(target_mat)
+  terms_used <- .resolve_endo_terms(endo_terms, binary = binary,
+                                    undirected = undirected)
+  gw_names <- c("gwesp", "gwodegree", "gwidegree", "gwdegree")
+  endo_cols <- list()
+  if ("reciprocity" %in% terms_used) {
+    endo_cols$reciprocity <- as.vector(t(target_mat))[keep]
+  }
+  if ("twopath" %in% terms_used) {
+    # bounded 0/1 closure indicator: "at least one shared contact"
+    endo_cols$twopath <-
+      as.numeric(as.vector(B_target %*% B_target)[keep] > 0)
+  }
+  if (any(gw_names %in% terms_used)) {
+    gw_stats <- .ergm_change_stats(B_target, gw_decay)
+    for (gnm in intersect(gw_names, terms_used)) {
+      endo_cols[[gnm]] <- as.vector(gw_stats[[gnm]])[keep]
+    }
+  }
 
   attr_predictors <- list()
   for (nm in names(attributes)) {
@@ -219,11 +387,7 @@
   parts <- list(
     base,
     y = y,
-    reciprocity = recip,
-    # 0/1 indicator for at least one two-path i -> k -> j (at least one
-    # shared contact), not the raw count: a bounded closure term cannot be
-    # driven upward without limit by ties imputed in earlier sweeps
-    twopath = as.numeric(twopath > 0),
+    if (length(endo_cols)) as.data.frame(endo_cols, check.names = FALSE) else NULL,
     as.data.frame(attr_predictors, check.names = FALSE),
     if (length(other_predictors)) as.data.frame(other_predictors,
                                                 check.names = FALSE) else NULL
@@ -237,11 +401,10 @@
 #' Dyadic (cell-level) regression on a vectorized adjacency matrix
 #'
 #' Regresses the vectorized off-diagonal cells of a target network on
-#' ego/alter/similarity terms for every nodal attribute, reciprocity (the
-#' transpose of the target network), a 0/1 indicator for the presence of at
-#' least one two-path i -> k -> j (`twopath` - "at least one shared
-#' contact"; deliberately bounded rather than a count, so imputed ties
-#' cannot push it upward without limit), and terms
+#' ego/alter/similarity terms for every nodal attribute, the target's own
+#' endogenous terms (see `endo_terms` - by default `reciprocity` plus the
+#' geometrically weighted shared-partner and degree change statistics), and
+#' terms
 #' derived from every other network supplied (tie value, reciprocity, and
 #' the sender's and receiver's out- and in-degrees in that network). This
 #' is the point-estimate analogue of
@@ -257,8 +420,16 @@
 #' \describe{
 #'   \item{\code{reciprocity}}{the target's transpose cell - the tie value
 #'     from j back to i.}
+#'   \item{\code{gwesp}, \code{gwodegree}, \code{gwidegree}}{for a binary
+#'     target: the geometrically weighted shared-partner and degree **change
+#'     statistics** - how much each ERGM statistic would move if this cell
+#'     went from 0 to 1, evaluated on the network with the cell removed. An
+#'     undirected binary target gets \code{gwesp} and a single summed
+#'     \code{gwdegree} instead, and no \code{reciprocity}.}
 #'   \item{\code{twopath}}{0/1 indicator for at least one two-path
-#'     i -> k -> j in the target network (at least one shared contact).}
+#'     i -> k -> j (at least one shared contact). The default closure term
+#'     before 1.1.0, and still the one used for a \emph{weighted} target,
+#'     where the binary-ERGM \code{gw*} statistics do not apply.}
 #'   \item{\code{<attr>_ego}, \code{<attr>_alter}, \code{<attr>_absdiff}}{
 #'     for every \emph{continuous} attribute: the sender's value, the
 #'     receiver's value, and their absolute difference.}
@@ -319,6 +490,18 @@
 #'   *target* network's structural dyads are removed from the returned
 #'   `data` - and hence from the regression - like the diagonal, so they
 #'   cannot inflate the zeros of the fitted model.
+#' @param endo_terms Endogenous (network-derived) terms to include, any of
+#'   `"reciprocity"`, `"twopath"`, `"gwesp"`, `"gwodegree"`, `"gwidegree"`.
+#'   Default `c("reciprocity", "twopath")`; use
+#'   `c("reciprocity", "gwesp", "gwodegree", "gwidegree")` for the
+#'   geometrically weighted change statistics, which are implemented and
+#'   tested but not the default - see `?netmice`. The set is
+#'   filtered by what the target supports - a weighted target gets `twopath`
+#'   rather than the `gw*` binary-ERGM statistics, and an undirected one has
+#'   no `reciprocity` (there `y_ji` is `y_ij`, which separates the fit) and a
+#'   single summed `gwdegree`. See `?netmice` for the full table.
+#' @param gw_decay Decay for the `gw*` statistics: a list with `esp`,
+#'   `outdegree`, `indegree`, or one number for all three (default `0.69`).
 #' @param random_intercepts `NULL` (default) fits an ordinary `glm()`.
 #'   Otherwise a character vector - any of `"ego"`, `"alter"`, `"dyad"` - and
 #'   the model is fit with \pkg{lme4} instead, adding a random intercept per
@@ -375,6 +558,9 @@ dyad_regression <- function(networks,
                             other_net_predictors = c("raw", "pca"),
                             PCA = list(n = 3, ratio = 10),
                             structural = NULL,
+                            endo_terms = c("reciprocity", "twopath"),
+                            gw_decay = list(esp = 0.69, outdegree = 0.69,
+                                            indegree = 0.69),
                             random_intercepts = NULL,
                             id_col = NULL,
                             fit = TRUE) {
@@ -419,9 +605,15 @@ dyad_regression <- function(networks,
   n_comp <- .pca_budget(PCA, .pca_denom(
     tgt_obs, NULL, binary = all(tgt_obs[!is.na(tgt_obs)] %in% c(0, 1))))
 
+  tgt_bin <- all(tgt_obs[!is.na(tgt_obs)] %in% c(0, 1))
   built <- .build_dyad_data(mats, attributes, target_idx, attr_types,
                              other_net_predictors, n_comp,
-                             structural = struct_list[[net_names[target_idx]]])
+                             structural = struct_list[[net_names[target_idx]]],
+                             endo_terms = .validate_endo_terms(endo_terms),
+                             gw_decay = .validate_gw_decay(gw_decay),
+                             undirected = isSymmetric(unname(
+                               mats[[target_idx]])),
+                             binary = tgt_bin)
 
   if (length(random_intercepts)) {
     built$data <- .add_dyad_groups(built$data)
