@@ -4,7 +4,9 @@
 #' Validate and normalize a `PCA` specification
 #'
 #' @param PCA A list with `n` (a fixed maximum number of components) and/or
-#'   `ratio` (rows-or-events per predictor). At least one must be set.
+#'   `ratio` (rows-or-events per predictor). At least one must be set. `n = 0`
+#'   is allowed and means "no components at all": only the protected columns
+#'   survive (see `.pca_budget()`).
 #' @return A list with `n` (integer or `NULL`) and `ratio` (numeric or `NULL`).
 #' @noRd
 .validate_pca <- function(PCA) {
@@ -18,21 +20,31 @@
     stop("`PCA` may only contain 'n' and 'ratio'; got: ", toString(bad), ".",
          call. = FALSE)
   }
-  check_num <- function(v, nm) {
+  check_num <- function(v, nm, allow_zero = FALSE) {
     if (is.null(v)) return(NULL)
-    if (!is.numeric(v) || length(v) != 1 || is.na(v) || v <= 0) {
-      stop("`PCA$", nm, "` must be a single positive number, or NULL.",
+    ok <- is.numeric(v) && length(v) == 1 && !is.na(v) &&
+      (if (allow_zero) v >= 0 else v > 0)
+    if (!ok) {
+      stop("`PCA$", nm, "` must be a single ",
+           if (allow_zero) "non-negative" else "positive", " number, or NULL.",
+           if (allow_zero) " (`n = 0` means no components: only the protected columns are kept.)",
            call. = FALSE)
     }
     v
   }
-  n <- check_num(PCA$n, "n")
+  # n = 0 is a deliberate request for no collapsed predictors at all; a ratio
+  # of 0 has no sensible meaning (infinitely many predictors per event)
+  n <- check_num(PCA$n, "n", allow_zero = TRUE)
   ratio <- check_num(PCA$ratio, "ratio")
   if (is.null(n) && is.null(ratio)) {
     stop("`PCA` must set at least one of `n` (a fixed number of components) ",
          "and `ratio` (rows or events per predictor).", call. = FALSE)
   }
-  list(n = if (is.null(n)) NULL else as.integer(floor(n)), ratio = ratio)
+  # only an explicit 0 means "no components": a fractional n below 1 floors
+  # to 1, as it always did, rather than silently becoming a zero request
+  n_int <- if (is.null(n)) NULL else if (n == 0) 0L else
+    max(1L, as.integer(floor(n)))
+  list(n = n_int, ratio = ratio)
 }
 
 #' Resolve the attribute-model PCA budget
@@ -128,11 +140,15 @@
 #'
 #' @param PCA A validated `PCA` list.
 #' @param denom Effective sample size from \code{.pca_denom()}.
-#' @return A positive integer: the most predictors this model may carry. Never
-#'   0 - an intercept-only fallback is handled downstream, and a budget of 0
-#'   would silently empty every design matrix on tiny samples.
+#' @return A non-negative integer: the most predictors this model may carry.
+#'   A budget derived from `ratio` is never 0 - on a tiny sample that would
+#'   silently empty every design matrix - so it floors at 1. The one way to get
+#'   0 is to ask for it explicitly with `n = 0`, which keeps only the protected
+#'   columns (a network target's endogenous and cross-network dyad terms, an
+#'   attribute model's isolate flags and `models` terms) and collapses nothing.
 #' @noRd
 .pca_budget <- function(PCA, denom) {
+  if (!is.null(PCA$n) && PCA$n == 0L) return(0L)
   caps <- integer(0)
   if (!is.null(PCA$n)) caps <- c(caps, PCA$n)
   if (!is.null(PCA$ratio)) caps <- c(caps, as.integer(floor(denom / PCA$ratio)))

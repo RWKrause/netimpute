@@ -924,6 +924,18 @@ net_diagnostics <- function(mat, directed = NULL) {
   }
   x <- keep_varying(x)
 
+  # an explicit zero budget (PCA$n = 0): keep the protected columns and
+  # nothing else - no components, and no overflow notice, since dropping the
+  # collapsible remainder is exactly what was asked for
+  if (!is.null(max_cols) && max_cols == 0) {
+    keep_idx <- if (is.null(keep_raw) || is.null(colnames(x))) {
+      rep(FALSE, ncol(x))
+    } else {
+      colnames(x) %in% keep_raw
+    }
+    return(x[, keep_idx, drop = FALSE])
+  }
+
   if (!is.null(max_cols) && max_cols >= 1 && ncol(x) > max_cols) {
     keep_idx <- if (is.null(keep_raw) || is.null(colnames(x))) {
       rep(FALSE, ncol(x))
@@ -1234,8 +1246,10 @@ net_diagnostics <- function(mat, directed = NULL) {
         } else {
           NULL
         }
-        v_budget_auto <- if (is.null(v_budget)) NULL else
-          max(1L, v_budget - if (is.null(extra)) 0L else ncol(extra))
+        # the one-component floor applies to a budget the `models` extras
+        # squeezed, not to an explicit request for none (PCA$n = 0)
+        v_budget_auto <- if (is.null(v_budget)) NULL else if (v_budget == 0L)
+          0L else max(1L, v_budget - if (is.null(extra)) 0L else ncol(extra))
 
         if (is.null(sel)) {
           # net_feats_df is NULL when every network was dropped via `targets`
@@ -1423,8 +1437,8 @@ net_diagnostics <- function(mat, directed = NULL) {
         } else {
           NULL
         }
-        auto_budget <- if (is.null(tie_budget)) NULL else
-          max(1L, tie_budget - if (is.null(extra)) 0L else ncol(extra))
+        auto_budget <- if (is.null(tie_budget)) NULL else if (tie_budget == 0L)
+          0L else max(1L, tie_budget - if (is.null(extra)) 0L else ncol(extra))
         auto_x <- if (is.null(sel)) {
           .clean_predictor_matrix(d[setdiff(names(d), drop_cols)],
                                   max_cols = auto_budget, ry = ry,
@@ -1889,6 +1903,14 @@ net_diagnostics <- function(mat, directed = NULL) {
 #'   separate the data perfectly. Continuous and multinomial targets use the
 #'   observed row count. The default `ratio = 10` is the conventional
 #'   events-per-variable floor (Peduzzi et al. 1996; Harrell 2015).
+#'
+#'   The budget counts **every** predictor, including the protected ones that
+#'   are never collapsed (a network target's endogenous and cross-network dyad
+#'   terms, an attribute model's isolate flags, and any `models` terms). What
+#'   is left over is the room for principal components, with a floor of one
+#'   component. `n = 0` is the one way below that floor: it collapses nothing
+#'   and keeps only the protected predictors - an intercept-only model for an
+#'   attribute with none.
 #' @param PCA_attributes Optional separate budget for the **attribute**
 #'   imputation models. `NULL` (default) inherits `PCA`, reproducing earlier
 #'   behaviour exactly. `"none"` imposes no budget on attribute models, so

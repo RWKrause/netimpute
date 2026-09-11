@@ -176,7 +176,15 @@ Details) collapses the remaining predictors to components.}
   ties, and budgeting against the rows would permit enough predictors to
   separate the data perfectly. Continuous and multinomial targets use the
   observed row count. The default `ratio = 10` is the conventional
-  events-per-variable floor (Peduzzi et al. 1996; Harrell 2015).}
+  events-per-variable floor (Peduzzi et al. 1996; Harrell 2015).
+
+  The budget counts **every** predictor, including the protected ones that
+  are never collapsed (a network target's endogenous and cross-network dyad
+  terms, an attribute model's isolate flags, and any `models` terms). What
+  is left over is the room for principal components, with a floor of one
+  component. `n = 0` is the one way below that floor: it collapses nothing
+  and keeps only the protected predictors - an intercept-only model for an
+  attribute with none.}
 
 \item{PCA_attributes}{Optional separate budget for the **attribute**
   imputation models. `NULL` (default) inherits `PCA`, reproducing earlier

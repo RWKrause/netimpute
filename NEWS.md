@@ -127,6 +127,15 @@ target.**
   it does reduce between-imputation variance: a large `lambda` will
   eventually make the imputations improperly narrow.
 
+* **`PCA = list(n = 0)`** is now accepted and means "no components": nothing
+  is collapsed and only the protected predictors are kept (a network target's
+  endogenous and cross-network dyad terms; an attribute model's isolate flags
+  and `models` terms, or an intercept-only model if it has none). It works for
+  `PCA_attributes` and `PCA_networks` too. Previously `n = 0` was rejected, and
+  every budget floored at one component; a budget derived from `ratio` still
+  does, and a fractional `n` below 1 still rounds up to 1 rather than silently
+  becoming a zero request.
+
 * **`PCA_networks`** budgets the tie models independently of `PCA`, mirroring
   `PCA_attributes`. Until now only the attribute side could be overridden,
   which had it backwards: an attribute model is budgeted against observed

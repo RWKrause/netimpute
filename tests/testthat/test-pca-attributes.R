@@ -44,7 +44,9 @@ test_that(".resolve_attribute_pca: NULL inherits, 'none' disables, list validate
   expect_error(.resolve_attribute_pca("no", PCA), "must be NULL")
   # list validation is delegated, so `PCA`'s rules apply unchanged
   expect_error(.resolve_attribute_pca(list(k = 1), PCA), "only contain")
-  expect_error(.resolve_attribute_pca(list(n = 0), PCA), "positive")
+  expect_error(.resolve_attribute_pca(list(n = -1), PCA), "non-negative")
+  # n = 0 (no components) passes through, as it does for `PCA` itself
+  expect_equal(.resolve_attribute_pca(list(n = 0), PCA)$n, 0L)
   expect_error(.resolve_attribute_pca(list(), PCA), "at least one")
 })
 
