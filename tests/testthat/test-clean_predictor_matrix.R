@@ -35,13 +35,43 @@ test_that(".clean_predictor_matrix: keep_raw columns bypass the PCA reduction", 
   # kept columns are passed through untransformed
   expect_identical(out[, "reciprocity"], x[, "reciprocity"])
   expect_identical(out[, "twopath"], x[, "twopath"])
-  # the remaining 8 columns are reduced to max_cols components
-  expect_equal(sum(grepl("^PC", colnames(out))), 4)
+  # ... but they SPEND the budget rather than riding on top of it: the two
+  # protected columns leave room for two components, not four, so the total
+  # width is max_cols. Until 1.1.0 this returned max_cols + length(keep_raw).
+  expect_equal(sum(grepl("^PC", colnames(out))), 2)
+  expect_equal(ncol(out), 4)
   # keep_raw names absent from x are ignored, and without keep_raw the
   # old everything-into-PCA behavior is unchanged
   out2 <- netimpute:::.clean_predictor_matrix(x, max_cols = 4,
                                               keep_raw = "no_such_column")
   expect_equal(ncol(out2), 4)
+})
+
+test_that(".clean_predictor_matrix: the budget is total, with a one-component floor", {
+  set.seed(11)
+  nm <- c(paste0("keep", 1:6), paste0("c", 1:8))
+  x <- matrix(rnorm(100 * 14), 100, 14, dimnames = list(NULL, nm))
+  keep <- paste0("keep", 1:6)
+
+  # protected block strictly larger than the budget: it is never collapsed,
+  # so it survives whole and the remainder falls back to the single
+  # guaranteed component rather than to nothing.
+  out <- netimpute:::.clean_predictor_matrix(x, max_cols = 4, keep_raw = keep)
+  expect_true(all(keep %in% colnames(out)))
+  expect_equal(sum(grepl("^PC", colnames(out))), 1)
+  ovf <- attr(out, "budget_overflow")
+  expect_equal(ovf, list(kept = 6, budget = 4))
+
+  # exactly filling the budget is not overflow, and still leaves the floor
+  out2 <- netimpute:::.clean_predictor_matrix(x, max_cols = 6, keep_raw = keep)
+  expect_null(attr(out2, "budget_overflow"))
+  expect_equal(sum(grepl("^PC", colnames(out2))), 1)
+
+  # room to spare: the remainder gets what the protected block did not use
+  out3 <- netimpute:::.clean_predictor_matrix(x, max_cols = 10, keep_raw = keep)
+  expect_null(attr(out3, "budget_overflow"))
+  expect_equal(sum(grepl("^PC", colnames(out3))), 4)
+  expect_equal(ncol(out3), 10)
 })
 
 test_that("netmice survives another network's ties living only on the target's missing dyads", {

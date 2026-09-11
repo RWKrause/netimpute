@@ -4,6 +4,11 @@
 
 # Local copy of the joint attribute+network missingness fixture: two
 # networks, so features carry the `<net>_` prefix.
+# This file's fixture is 22 nodes with two networks, so the tie budget is 1-2
+# columns against a 4-column protected dyad block. That over-budget warning is
+# expected here and is not what these tests are about.
+pa_netmice <- function(...) suppress_budget_overflow(netmice(...))
+
 pa_fixture <- function(n = 22, seed = 501) {
   set.seed(seed)
   attrs   <- fx_attrs(n = n, seed = seed)[c("age", "status", "dept")]
@@ -39,7 +44,9 @@ test_that(".resolve_attribute_pca: NULL inherits, 'none' disables, list validate
   expect_error(.resolve_attribute_pca("no", PCA), "must be NULL")
   # list validation is delegated, so `PCA`'s rules apply unchanged
   expect_error(.resolve_attribute_pca(list(k = 1), PCA), "only contain")
-  expect_error(.resolve_attribute_pca(list(n = 0), PCA), "positive")
+  expect_error(.resolve_attribute_pca(list(n = -1), PCA), "non-negative")
+  # n = 0 (no components) passes through, as it does for `PCA` itself
+  expect_equal(.resolve_attribute_pca(list(n = 0), PCA)$n, 0L)
   expect_error(.resolve_attribute_pca(list(), PCA), "at least one")
 })
 
@@ -63,9 +70,9 @@ test_that("a NULL budget disables the collapse in .clean_predictor_matrix()", {
 test_that("PCA_attributes = NULL reproduces the inherited-PCA imputations exactly", {
   fx <- pa_fixture()
 
-  a <- netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 42,
+  a <- pa_netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 42,
                PCA = list(n = 2), printFlag = FALSE)
-  b <- netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 42,
+  b <- pa_netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 42,
                PCA = list(n = 2), PCA_attributes = NULL, printFlag = FALSE)
 
   expect_equal(complete_netmice(a, 1)$data, complete_netmice(b, 1)$data)
@@ -77,9 +84,9 @@ test_that("PCA_attributes = 'none' keeps attribute predictors uncollapsed", {
 
   # a budget of 1 forces a hard collapse; "none" must undo it, so the two
   # runs cannot agree on the attribute imputations
-  tight <- netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 42,
+  tight <- pa_netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 42,
                    PCA = list(n = 1), printFlag = FALSE)
-  free  <- netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 42,
+  free  <- pa_netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 42,
                    PCA = list(n = 1), PCA_attributes = "none",
                    printFlag = FALSE)
 
@@ -93,7 +100,7 @@ test_that("PCA_attributes = 'none' keeps attribute predictors uncollapsed", {
 test_that("PCA_attributes = 'none' still imputes the networks", {
   fx <- pa_fixture()
 
-  fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 42,
+  fit <- pa_netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 42,
                  PCA = list(n = 2), PCA_attributes = "none",
                  printFlag = FALSE)
   net <- complete_netmice(fit, 1)$networks$friends
@@ -119,7 +126,7 @@ test_that("a hand-built netquickpred selection survives a NULL attribute budget"
   ), class = "netquickpred")
 
   expect_no_error(
-    fit <- netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 42,
+    fit <- pa_netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 42,
                    PCA = list(n = 1), PCA_attributes = "none",
                    predictor_selection = sel, printFlag = FALSE)
   )

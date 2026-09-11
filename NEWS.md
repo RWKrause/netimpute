@@ -1,6 +1,163 @@
-# netimpute (development version)
+# netimpute 1.1.0
+
+Tie imputation was over-imputing: `netmice()` 1.0.0 filled missing cells at
+about **1.5x the true tie rate**, and on the sparsest networks at 3-5x. The
+true rate among the missing cells equalled the observed density, so there was
+nothing for the imputation to correct for - the surplus was model bias. The
+changes below address it. **Imputed tie values change for every network
+target.**
 
 ## Breaking changes
+
+* **The `PCA` budget is now the *total* predictor count, protected columns
+  included.** `.clean_predictor_matrix()` previously applied the cap only to
+  the columns it was about to collapse and then appended the protected block
+  (a network target's own endogenous terms plus one `_tie`/`_recip` pair per
+  other network) on top, so a tie model carried `budget + length(keep_raw)`
+  predictors. With eight networks that is 16 extra, and the
+  events-per-variable rule `PCA$ratio` documents (Peduzzi et al. 1996;
+  Harrell 2015) was missed by that margin - worst on sparse networks, where
+  the budget is smallest and the overshoot proportionally largest. On an
+  eight-network dataset at 30% missing, the realised events per variable rose
+  from 4.8-8.9 to 9.1-10.2 against an intended 10.
+
+  Protected columns still keep their own named coefficients; they now spend
+  the budget rather than riding on top of it, and the collapsible remainder
+  is reduced accordingly. At least one component always survives, so a
+  protected block that fills the budget cannot silently discard every
+  attribute and cross-network predictor. When it exceeds the budget outright
+  `netmice()` raises a `netimpute_budget_overflow` warning naming the target.
+
+* **`models` terms are counted against the budget too.** They were appended
+  with no cap at all, a second route past the same rule. They are still never
+  collapsed into components - that would defeat the congeniality guarantee
+  `models` exists to provide - but they are now built first and spend the
+  budget, leaving the auto-generated block to collapse into what remains.
+
+* **`net_sweeps` defaults to 5**, so a network's missing cells are drawn five
+  times per visit rather than once. Imputed ties differ from 1.0.0 as a
+  result. Set `net_sweeps = 1` for the old behaviour.
+
+* **`reciprocity` is no longer emitted for an undirected target.** There
+  `y_ji` is `y_ij`, so the column was a perfect predictor and the working
+  model separated on it - visible only as a suppressed fit warning and a
+  tolerated `chol()` failure. Undirected results change accordingly, and
+  `dyad_regression()` no longer returns that column for symmetric input.
+
+* **A failed Cholesky no longer disables the coefficient draw** - see Bug
+  fixes. This changes imputed values wherever it used to trigger.
+
+## New features
+
+* **`net_sweeps`** (default `5`) makes K Gibbs passes over a network's missing
+  cells per visit instead of one, each in a fresh random order, conditioning
+  on every tie drawn so far. The tie updater is the full-conditional Gibbs
+  sampler of an ERGM estimated by pseudo-likelihood; `net_sweeps` controls how
+  far the network mixes toward the distribution its coefficients imply, while
+  `maxit` controls the outer MICE chain and is where those coefficients are
+  re-estimated. Coefficients are drawn once per visit and reused across the K
+  passes, so raising it costs sweep time but no extra model fits (~0.14 s per
+  pass per network at n = 100).
+
+  Drawing each cell once per visit left the per-iteration tie density still
+  drifting at `maxit = 20`. At K = 5 the imputed out-degree dispersion moves
+  closer to truth and the correlation between true and imputed out-degree rose
+  from 0.24 to 0.34 on the development data. **Imputed values change.**
+
+* **`net_endo_terms` and `net_gw_decay`** expose the tie model's endogenous
+  statistics: `reciprocity`, the bounded `twopath` indicator, and the
+  geometrically weighted change statistics `gwesp`, `gwodegree`, `gwidegree`.
+  These are true ERGM change statistics - the movement in the statistic if the
+  cell went 0 to 1, evaluated on the network with that cell removed - which
+  makes the degree terms leave-one-out by construction, so the tie being
+  imputed is never a summand of its own predictor.
+
+  The default is `c("reciprocity", "twopath")`, i.e. unchanged from 1.0.0.
+  **The `gw*` terms are implemented, tested and documented but not on by
+  default**: on the development data they reproduced triadic closure better
+  than `twopath` did, yet bought it by inventing ties, worst where ties are
+  rarest (at density 0.008 the imputed tie rate went from 2.1x truth to 4.3x,
+  and mean Brier skill across eight networks from 0.12 to -0.07). `twopath` is
+  bounded by 1; `gwesp`'s change statistic is bounded by
+  `exp(decay) + 2(n - 2)`, so a positive coefficient on it is a strong tie
+  generator. They may well pay off on denser networks or at a lower decay -
+  that is what the argument is for.
+
+  Which terms a target actually receives depends on its type: an undirected
+  target has no `reciprocity` (there `y_ji` *is* `y_ij`, which makes the
+  column a perfect predictor and separates the fit), a weighted target keeps
+  `twopath` rather than the binary-ERGM `gw*` statistics, and an undirected
+  binary target gets a single summed `gwdegree`. The set is filtered rather
+  than rejected, because `networks` is routinely a mixed list; a `models`
+  formula naming a term its target does not have is a clear error.
+
+* **The linear predictor is clamped** to +/-30 before `plogis()` in the
+  sequential updater, so no endogenous statistic can pin every probability at
+  exactly 0 or 1 and turn the sweep deterministic.
+
+* **`net_ridge`** adds an optional ridge penalty to the tie working model,
+  **off by default** (`lambda = 0`). It is off because, on the data it was
+  developed against, the total-budget fix alone already brought the imputed
+  tie rate to within 2% of truth, and adding `lambda = 0.01` on top made the
+  level bias slightly worse while cutting node-level discrimination sharply
+  (mean Brier skill 0.17 to 0.04, mean correlation between true and imputed
+  out-degree 0.26 to 0.02). A ridge shrinks the worst-identified directions
+  hardest, and on a dyad design that is where the between-node signal lives.
+  The argument is provided, tested and documented so the penalty can be
+  measured properly rather than assumed. The fit is
+  routinely done at a handful of events per predictor, and an unpenalised
+  logistic fit there produces a linear predictor whose spread is far too
+  large: fitted probabilities pile up near 0 and 1. Because `plogis()` is
+  convex below 0.5, an over-dispersed linear predictor inflates the *mean*
+  imputed tie probability wherever ties are rare - which is exactly the
+  observed over-imputation.
+
+  Predictors are standardised on the observed dyads before the penalty is
+  applied and mapped back afterwards, so one `lambda` is meaningful across a
+  design mixing 0/1 dyad indicators, principal components and attribute
+  differences. Every non-intercept coefficient is penalised, including the
+  endogenous and cross-network terms protected from the PCA collapse - those
+  are the columns most likely to be numerous relative to the events
+  available. The intercept is never penalised, so the baseline density stays
+  free to match the observed rate. `scale = "epv"` makes `lambda` track
+  predictors-per-event so a thinly identified target is penalised harder.
+
+  The Bayesian coefficient draw uses the penalised covariance and is
+  therefore also shrunk. That is intended, for the same convexity reason, but
+  it does reduce between-imputation variance: a large `lambda` will
+  eventually make the imputations improperly narrow.
+
+* **`PCA = list(n = 0)`** is now accepted and means "no components": nothing
+  is collapsed and only the protected predictors are kept (a network target's
+  endogenous and cross-network dyad terms; an attribute model's isolate flags
+  and `models` terms, or an intercept-only model if it has none). It works for
+  `PCA_attributes` and `PCA_networks` too. Previously `n = 0` was rejected, and
+  every budget floored at one component; a budget derived from `ratio` still
+  does, and a fractional `n` below 1 still rounds up to 1 rather than silently
+  becoming a zero request.
+
+* **`PCA_networks`** budgets the tie models independently of `PCA`, mirroring
+  `PCA_attributes`. Until now only the attribute side could be overridden,
+  which had it backwards: an attribute model is budgeted against observed
+  rows and a tie model against observed *events*, and it is the tie models
+  that run closest to their budget, since the protected dyad block grows by
+  two columns for every additional network and cannot be collapsed. `"none"`
+  imposes no budget on tie models.
+
+## Bug fixes
+
+* **A failed Cholesky factorisation of the coefficient covariance no longer
+  silently disables the Bayesian draw.** `.impute_ties_gibbs()` wrapped
+  `chol(vcov(fit))` in `tryCatch()` and, on failure, left *every* coefficient
+  at its point estimate - so between-imputation variance collapsed to zero
+  with no warning, exactly when the fit was least trustworthy. The diagonal
+  is now nudged and the draw proceeds.
+
+## Also new in 1.1.0
+
+These were listed as unreleased development changes; the version was never bumped for them, so they ship in 1.1.0 too.
+
+### Breaking changes
 
 * **`netmice()`'s `net_list` argument is now called `networks`**, and the same
   rename applies to `dyad_regression()`, `net_predictors()` and
@@ -27,7 +184,7 @@
   `n/3` predictors now typically carry fewer, and mixed-model fits that were
   borderline may now fall back to standard PMM.
 
-## New features
+### New features
 
 * **`netmice()` gains `PCA_attributes`**, an optional separate predictor
   budget for the attribute imputation models. `NULL` (the default) inherits
@@ -110,7 +267,7 @@
   traces were therefore never good evidence of convergence at low missingness.
   Prefer the imputed-tie traces when judging whether to raise `maxit`.
 
-## Documentation
+### Documentation
 
 * New vignette, `vignette("netimpute")`: a worked introduction covering a
   first imputation, convergence checks, pooling results with `mice::pool()`,
@@ -121,7 +278,7 @@
 * Every exported topic now has a `\seealso` section cross-linking the
   pipeline, so the help pages are navigable from any entry point.
 
-## Bug fixes
+### Bug fixes
 
 * `plot()` no longer leaves the caller's `par()` settings modified. The
   networks page saved `par` *after* the attributes page had already applied its

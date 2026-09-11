@@ -18,6 +18,7 @@ netmice(
   other_net_predictors = c("raw", "pca"),
   PCA = list(n = NULL, ratio = 10),
   PCA_attributes = NULL,
+  PCA_networks = NULL,
   net_random_intercepts = NULL,
   structural = NULL,
   net_dependence = NULL,
@@ -29,6 +30,10 @@ netmice(
   collin_method = c("pairwise", "vif", "none"),
   collin_threshold = NULL,
   net_init = c("zero", "sample"),
+  net_ridge = list(lambda = 0, scale = "fixed"),
+  net_sweeps = 5L,
+  net_endo_terms = c("reciprocity", "twopath"),
+  net_gw_decay = list(esp = 0.69, outdegree = 0.69, indegree = 0.69),
   net_update = c("gibbs", "simultaneous"),
   ncores = 1L,
   seed = NA,
@@ -171,14 +176,21 @@ Details) collapses the remaining predictors to components.}
   ties, and budgeting against the rows would permit enough predictors to
   separate the data perfectly. Continuous and multinomial targets use the
   observed row count. The default `ratio = 10` is the conventional
-  events-per-variable floor (Peduzzi et al. 1996; Harrell 2015).}
+  events-per-variable floor (Peduzzi et al. 1996; Harrell 2015).
+
+  The budget counts **every** predictor, including the protected ones that
+  are never collapsed (a network target's endogenous and cross-network dyad
+  terms, an attribute model's isolate flags, and any `models` terms). What
+  is left over is the room for principal components, with a floor of one
+  component. `n = 0` is the one way below that floor: it collapses nothing
+  and keeps only the protected predictors - an intercept-only model for an
+  attribute with none.}
 
 \item{PCA_attributes}{Optional separate budget for the **attribute**
   imputation models. `NULL` (default) inherits `PCA`, reproducing earlier
   behaviour exactly. `"none"` imposes no budget on attribute models, so
   their predictors keep their own coefficients instead of being collapsed
   to components. A `list(n=, ratio=)` sets an attribute-only budget.
-  Tie models always use `PCA`.
 
   The two sides are not comparable: an attribute model is budgeted against
   observed *rows*, a tie model against observed *events*, which at typical
@@ -187,6 +199,17 @@ Details) collapses the remaining predictors to components.}
   deliberately chosen set whose individual coefficients are the point;
   note that it removes the safeguard, so a wide predictor set against few
   observed rows can leave the univariate models near-singular.}
+
+\item{PCA_networks}{The same, for the **tie** models: `NULL` (default)
+inherits `PCA`, `"none"` imposes no budget on tie models, and a
+`list(n=, ratio=)` sets a tie-only budget. Added in 1.1.0 - before it,
+only the attribute side could be overridden, which had it backwards.
+The tie models are the ones that run closest to their budget: a network
+target's protected dyad block (its own endogenous statistics plus one
+`_tie`/`_recip` pair per other network) is never collapsed and grows by
+two columns for every additional network, so with many networks and a
+sparse target it can fill the budget on its own. When that happens
+`netmice()` warns; widening `PCA_networks` is the direct remedy.}
 
 \item{net_random_intercepts}{`NULL` (default) or a character vector - any
 of `"ego"`, `"alter"`, `"dyad"`. When set, the working model for
@@ -316,6 +339,124 @@ first sweep's structural terms downward but cannot seed a
 self-reinforcing surplus of random initial ties. `"sample"` restores
 the previous behavior of filling missing cells by resampling observed
 off-diagonal values (marginal-density start).}
+
+\item{net_ridge}{Ridge penalty for the **tie** working model under
+  `net_update = "gibbs"`: a list with `lambda` and `scale`, either
+  `"fixed"` or `"epv"`. A bare number is shorthand for
+  `list(lambda = ...)`. New in 1.1.0, and **off by default**
+  (`lambda = 0`).
+
+  It is off by default because the evidence so far says it costs more than
+  it buys. On an eight-network dataset the total-budget fix alone brought
+  the imputed tie rate to within 2% of truth; adding `lambda = 0.01` on top
+  made the level bias slightly worse and cut the imputed networks' node-level
+  discrimination sharply (Brier skill 0.17 to 0.04). A ridge shrinks the
+  *worst-identified* directions hardest, and on a dyad design that is where
+  the between-node signal lives. Raise it only with a measurement in hand.
+
+  Predictors are standardised on the observed dyads before the penalty is
+  applied and mapped back afterwards, so `lambda` is on a common scale
+  across a design that mixes 0/1 dyad indicators, principal components and
+  attribute differences. Every non-intercept coefficient is penalised,
+  including the endogenous and cross-network terms that `PCA` protects from
+  collapse; the intercept is not, so the baseline density stays free to
+  match the observed rate. `scale = "epv"` multiplies `lambda` by
+  predictors-per-event, penalising a thinly identified target harder than a
+  well-identified one.
+
+  The penalty also shrinks the Bayesian coefficient draw, since that draw
+  uses the penalised covariance. This is intended - an over-dispersed
+  linear predictor inflates the *mean* imputed tie probability wherever
+  ties are rare, because `plogis()` is convex below 0.5 - but it does
+  reduce between-imputation variance, so a large `lambda` will eventually
+  make the imputations improperly narrow. The `simultaneous` updater goes
+  through mice's own methods and is unaffected by this argument.}
+
+\item{net_sweeps}{Number of Gibbs passes over a network's missing cells per
+  visit, under `net_update = "gibbs"` (default `5`). Each pass visits every
+  missing cell once, in a fresh random order, conditioning on all ties
+  drawn so far.
+
+  The tie updater is the full-conditional Gibbs sampler of an ERGM whose
+  coefficients were estimated by pseudo-likelihood, restricted to the
+  missing cells. `net_sweeps` controls how far the network mixes toward the
+  distribution those coefficients imply; `maxit` controls the outer MICE
+  chain and is where the coefficients are re-estimated. One pass per visit
+  (the pre-1.1.0 behaviour, `net_sweeps = 1`) leaves each cell drawn once
+  against a state that has barely moved, which is why the per-iteration tie
+  density used to drift for many iterations without settling.
+
+  The coefficients are drawn once per visit and reused across all
+  `net_sweeps` passes, so raising it costs sweep time but no extra model
+  fits. It also means the predictors for the *observed* dyads go
+  progressively staler across passes, since they are computed from the
+  partly imputed matrix at the start of the visit - a reason not to set it
+  enormously high relative to `maxit`.}
+
+\item{net_endo_terms}{Which endogenous (network-derived) statistics the tie
+  models may carry. Any of `"reciprocity"`, `"twopath"`, `"gwesp"`,
+  `"gwodegree"`, `"gwidegree"`; the default is
+  `c("reciprocity", "twopath")`. Set
+  `c("reciprocity", "gwesp", "gwodegree", "gwidegree")` for the
+  geometrically weighted change statistics.
+
+  **The `gw*` terms are available but not the default**, on measurement.
+  They behave as advertised - `gwesp` pulls the shared-partner count of the
+  imputed ties toward truth where the bounded `twopath` indicator
+  under-closed - but on the data they were developed against they buy that
+  closure by inventing ties, and badly so on sparse networks: at
+  density 0.008 the imputed tie rate went from 2.1x truth to 4.3x, maximum
+  imputed out-degree from 1.6x the true maximum to 3.0x, and mean Brier
+  skill across eight networks from 0.12 to -0.07 (worse than predicting the
+  base rate). Raising `net_sweeps` amplifies it, since more Gibbs passes let
+  the closure feedback run further.
+
+  The mechanism is not mysterious. `twopath` is bounded by 1; `gwesp`'s
+  change statistic is bounded by `exp(decay) + 2(n - 2)`, a few hundred at
+  n = 100. A positive coefficient on a statistic that large is a strong tie
+  generator. Try them on denser networks, or with a smaller `net_gw_decay`,
+  and check the imputed tie rate against the observed density before
+  trusting them.
+
+  These enter as ERGM **change statistics**: the amount the corresponding
+  network statistic would move if that cell went from 0 to 1, evaluated on
+  the network with the cell removed. That last part is what makes the
+  degree terms leave-one-out - the tie being imputed is never a summand of
+  its own predictor - and it is why a hand-rolled `degree + degree^2` pair
+  would not work in their place.
+
+  The request is filtered by what each target can actually support, rather
+  than erroring, because `networks` is routinely a mixed list:
+
+  \tabular{lll}{
+    \strong{target} \tab \strong{directed} \tab \strong{undirected} \cr
+    binary \tab reciprocity, gwesp, gwodegree, gwidegree \tab gwesp, gwdegree \cr
+    weighted \tab reciprocity, twopath \tab twopath
+  }
+
+  An undirected target has no `reciprocity` term because there `y_ji` *is*
+  `y_ij`, which makes the column a perfect predictor and separates the
+  working model. A weighted target keeps the bounded 0/1 `twopath`
+  indicator instead of the `gw*` terms, which are statistics of a *binary*
+  ERGM. An undirected binary target gets a single `gwdegree` in place of
+  the out/in pair, since one tie raises the degree of both endpoints.
+
+  A `models` formula naming a term its target does not have is an error
+  that says so, and lists the terms that target does have.}
+
+\item{net_gw_decay}{Decay parameters for the `gw*` change statistics:
+  a list with `esp`, `outdegree` and `indegree`, or a single number used
+  for all three. Default `0.69` throughout, i.e. `w = 1 - exp(-decay)` of
+  about 0.5, so each additional shared partner or degree step is worth
+  roughly half the last. As in standard ERGM practice the decay is fixed
+  rather than estimated; values outside roughly `[0.05, 5]` warn, since a
+  very small decay collapses the degree terms into an isolate indicator and
+  a very large one makes every change statistic near-constant.
+
+  Note that `gwesp` is bounded only by `exp(decay) + 2(n - 2)`, unlike the
+  0/1 `twopath` it replaces, so its linear predictor is clamped inside the
+  sweep to keep a large positive coefficient from pinning every probability
+  at 0 or 1.}
 
 \item{net_update}{How a network's missing cells are updated at each
 visit. `"gibbs"` (default): sequential single-tie ("tie-wise")

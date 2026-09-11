@@ -1,7 +1,7 @@
 Package: netimpute
 Type: Package
 Title: Joint Multiple Imputation of Network Ties and Node Attributes
-Version: 1.0.0
+Version: 1.1.0
 Authors@R: c(
     person(
       "Robert W.", "Krause",

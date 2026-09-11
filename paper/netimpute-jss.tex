@@ -277,9 +277,21 @@ ego value, an alter value, and either an absolute difference (continuous
 attributes) or a same-category indicator (categorical attributes), reciprocity
 (the transposed target network), a bounded $0/1$ two-path indicator
 (\code{twopath} --- ``at least one shared contact'', i.e.\ at least one
-path $i \to k \to j$ to impte $x_{ij}$), and, for every
+path $i \to k \to j$ to impute $x_{ij}$), and, for every
 \emph{other} network supplied, its tie value, its reciprocity (transpose), and
-the sender's and the receiver's out- and in-degree in that network. When
+the sender's and the receiver's out- and in-degree in that network. The endogenous terms are configurable through
+\code{net\_endo\_terms}: besides \code{reciprocity} and \code{twopath}, the
+geometrically weighted change statistics \code{gwesp}, \code{gwodegree} and
+\code{gwidegree} are available for binary targets. These are ERGM change
+statistics --- the movement in the corresponding network statistic if the
+cell went from $0$ to $1$, evaluated on the network with that cell removed
+--- so the degree terms are leave-one-out by construction and the tie being
+imputed never enters its own predictor. They are not enabled by default:
+\code{twopath} is bounded by $1$, whereas \code{gwesp}'s change statistic is
+bounded by $e^{\alpha} + 2(n-2)$, and in our diagnostics a positive
+coefficient on it generated substantially too many ties on sparse networks.
+An undirected target carries no \code{reciprocity} term, since there
+$x_{ji}$ \emph{is} $x_{ij}$. When
 many other networks are supplied, \code{other\_net\_predictors = "pca"}
 replaces the node-level degree terms with the first \code{n\_components}
 principal components. By default the dyad-level cross-network terms (the other
@@ -315,7 +327,8 @@ attribute targets the candidates are the other attributes plus every
 node-level network measure of Section~\ref{sec:measures} (computed on the
 observed ties); for network targets, screening happens at the dyad level on
 the design terms of Section~\ref{sec:dyad}, with the target's own
-\code{reciprocity} and \code{twopath} always included unscreened.
+\code{reciprocity} and \code{twopath} (and any other active endogenous
+term) always included unscreened.
 
 Because a
 selected predictor's own missing values are imputed inside the chain, the
@@ -498,10 +511,12 @@ raw node attributes, and may interact any internally created term with any
 other --- including the target's own endogenous terms and other networks'
 terms: \code{friends \~{} age\_ego:reciprocity}, for instance, lets the
 tendency to reciprocate depend on the sender's age. Under the default
-tie-wise updating, an interaction involving \code{reciprocity} or
-\code{twopath} is, like those main effects, re-evaluated from the current
-matrix state after every single tie draw, so the interaction stays live
-throughout the sequential sweep. The full lists of referenceable dyad-level
+tie-wise updating, an interaction involving any endogenous term is, like those
+main effects, re-evaluated from the current matrix state after every single
+tie draw, so the interaction stays live throughout the sequential sweep. That
+sweep is repeated \code{net\_sweeps} times per visit (default $5$), each pass
+visiting the missing cells in a fresh random order and conditioning on every
+tie drawn so far, with the working model fitted once per visit. The full lists of referenceable dyad-level
 term names and of implemented network measures are given in dedicated
 sections of the \code{netmice()} help page. Variables and networks a
 formula depends on are automatically protected from being dropped by

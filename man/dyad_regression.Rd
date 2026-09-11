@@ -13,6 +13,8 @@ dyad_regression(
   other_net_predictors = c("raw", "pca"),
   PCA = list(n = 3, ratio = 10),
   structural = NULL,
+  endo_terms = c("reciprocity", "twopath"),
+  gw_decay = list(esp = 0.69, outdegree = 0.69, indegree = 0.69),
   random_intercepts = NULL,
   id_col = NULL,
   fit = TRUE
@@ -70,6 +72,20 @@ non-zero observed value there errors); they are fixed at 0 and the
 `data` - and hence from the regression - like the diagonal, so they
 cannot inflate the zeros of the fitted model.}
 
+\item{endo_terms}{Endogenous (network-derived) terms to include, any of
+`"reciprocity"`, `"twopath"`, `"gwesp"`, `"gwodegree"`, `"gwidegree"`.
+Default `c("reciprocity", "twopath")`; use
+`c("reciprocity", "gwesp", "gwodegree", "gwidegree")` for the
+geometrically weighted change statistics, which are implemented and
+tested but not the default - see `?netmice`. The set is
+filtered by what the target supports - a weighted target gets `twopath`
+rather than the `gw*` binary-ERGM statistics, and an undirected one has
+no `reciprocity` (there `y_ji` is `y_ij`, which separates the fit) and a
+single summed `gwdegree`. See `?netmice` for the full table.}
+
+\item{gw_decay}{Decay for the `gw*` statistics: a list with `esp`,
+`outdegree`, `indegree`, or one number for all three (default `0.69`).}
+
 \item{random_intercepts}{`NULL` (default) fits an ordinary `glm()`.
 Otherwise a character vector - any of `"ego"`, `"alter"`, `"dyad"` - and
 the model is fit with \pkg{lme4} instead, adding a random intercept per
@@ -110,11 +126,10 @@ A list with `data` (dyad-level data.frame including `i`, `j`
 }
 \description{
 Regresses the vectorized off-diagonal cells of a target network on
-ego/alter/similarity terms for every nodal attribute, reciprocity (the
-transpose of the target network), a 0/1 indicator for the presence of at
-least one two-path i -> k -> j (`twopath` - "at least one shared
-contact"; deliberately bounded rather than a count, so imputed ties
-cannot push it upward without limit), and terms
+ego/alter/similarity terms for every nodal attribute, the target's own
+endogenous terms (see `endo_terms` - by default `reciprocity` plus the
+geometrically weighted shared-partner and degree change statistics), and
+terms
 derived from every other network supplied (tie value, reciprocity, and
 the sender's and receiver's out- and in-degrees in that network). This
 is the point-estimate analogue of
@@ -131,8 +146,16 @@ reference:
 \describe{
   \item{\code{reciprocity}}{the target's transpose cell - the tie value
     from j back to i.}
+  \item{\code{gwesp}, \code{gwodegree}, \code{gwidegree}}{for a binary
+    target: the geometrically weighted shared-partner and degree **change
+    statistics** - how much each ERGM statistic would move if this cell
+    went from 0 to 1, evaluated on the network with the cell removed. An
+    undirected binary target gets \code{gwesp} and a single summed
+    \code{gwdegree} instead, and no \code{reciprocity}.}
   \item{\code{twopath}}{0/1 indicator for at least one two-path
-    i -> k -> j in the target network (at least one shared contact).}
+    i -> k -> j (at least one shared contact). The default closure term
+    before 1.1.0, and still the one used for a \emph{weighted} target,
+    where the binary-ERGM \code{gw*} statistics do not apply.}
   \item{\code{<attr>_ego}, \code{<attr>_alter}, \code{<attr>_absdiff}}{
     for every \emph{continuous} attribute: the sender's value, the
     receiver's value, and their absolute difference.}

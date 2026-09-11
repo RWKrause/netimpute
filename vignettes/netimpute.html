@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+
+
+<title>Introduction to netimpute</title>
+
+<script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
+// be compatible with the behavior of Pandoc < 2.8).
+document.addEventListener('DOMContentLoaded', function(e) {
+  var hs = document.querySelectorAll("div.section[class*='level'] > :first-child");
+  var i, h, a;
+  for (i = 0; i < hs.length; i++) {
+    h = hs[i];
+    if (!/^h[1-6]$/i.test(h.tagName)) continue;  // it should be a header h1-h6
+    a = h.attributes;
+    while (a.length > 0) h.removeAttribute(a[0].name);
+  }
+});
+</script>
+
+<style type="text/css">
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+span.underline{text-decoration: underline;}
+div.column{display: inline-block; vertical-align: top; width: 50%;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+</style>
+
+
+
+<style type="text/css">
+code {
+white-space: pre;
+}
+.sourceCode {
+overflow: visible;
+}
+</style>
+<style type="text/css" data-origin="pandoc">
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+<script>
+// apply pandoc div.sourceCode style to pre.sourceCode instead
+(function() {
+  var sheets = document.styleSheets;
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].ownerNode.dataset["origin"] !== "pandoc") continue;
+    try { var rules = sheets[i].cssRules; } catch (e) { continue; }
+    var j = 0;
+    while (j < rules.length) {
+      var rule = rules[j];
+      // check if there is a div.sourceCode rule
+      if (rule.type !== rule.STYLE_RULE || rule.selectorText !== "div.sourceCode") {
+        j++;
+        continue;
+      }
+      var style = rule.style.cssText;
+      // check if color or background-color is set
+      if (rule.style.color === '' && rule.style.backgroundColor === '') {
+        j++;
+        continue;
+      }
+      // replace div.sourceCode by a pre.sourceCode rule
+      sheets[i].deleteRule(j);
+      sheets[i].insertRule('pre.sourceCode{' + style + '}', j);
+    }
+  }
+})();
+</script>
+
+
+
+
+<style type="text/css">body {
+background-color: #fff;
+margin: 1em auto;
+max-width: 700px;
+overflow: visible;
+padding-left: 2em;
+padding-right: 2em;
+font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+font-size: 14px;
+line-height: 1.35;
+}
+#TOC {
+clear: both;
+margin: 0 0 10px 10px;
+padding: 4px;
+width: 400px;
+border: 1px solid #CCCCCC;
+border-radius: 5px;
+background-color: #f6f6f6;
+font-size: 13px;
+line-height: 1.3;
+}
+#TOC .toctitle {
+font-weight: bold;
+font-size: 15px;
+margin-left: 5px;
+}
+#TOC ul {
+padding-left: 40px;
+margin-left: -1.5em;
+margin-top: 5px;
+margin-bottom: 5px;
+}
+#TOC ul ul {
+margin-left: -2em;
+}
+#TOC li {
+line-height: 16px;
+}
+table {
+margin: 1em auto;
+border-width: 1px;
+border-color: #DDDDDD;
+border-style: outset;
+border-collapse: collapse;
+}
+table th {
+border-width: 2px;
+padding: 5px;
+border-style: inset;
+}
+table td {
+border-width: 1px;
+border-style: inset;
+line-height: 18px;
+padding: 5px 5px;
+}
+table, table th, table td {
+border-left-style: none;
+border-right-style: none;
+}
+table thead, table tr.even {
+background-color: #f7f7f7;
+}
+p {
+margin: 0.5em 0;
+}
+blockquote {
+background-color: #f6f6f6;
+padding: 0.25em 0.75em;
+}
+hr {
+border-style: solid;
+border: none;
+border-top: 1px solid #777;
+margin: 28px 0;
+}
+dl {
+margin-left: 0;
+}
+dl dd {
+margin-bottom: 13px;
+margin-left: 13px;
+}
+dl dt {
+font-weight: bold;
+}
+ul {
+margin-top: 0;
+}
+ul li {
+list-style: circle outside;
+}
+ul ul {
+margin-bottom: 0;
+}
+pre, code {
+background-color: #f7f7f7;
+border-radius: 3px;
+color: #333;
+white-space: pre-wrap; 
+}
+pre {
+border-radius: 3px;
+margin: 5px 0px 10px 0px;
+padding: 10px;
+}
+pre:not([class]) {
+background-color: #f7f7f7;
+}
+code {
+font-family: Consolas, Monaco, 'Courier New', monospace;
+font-size: 85%;
+}
+p > code, li > code {
+padding: 2px 0px;
+}
+div.figure {
+text-align: center;
+}
+img {
+background-color: #FFFFFF;
+padding: 2px;
+border: 1px solid #DDDDDD;
+border-radius: 3px;
+border: 1px solid #CCCCCC;
+margin: 0 5px;
+}
+h1 {
+margin-top: 0;
+font-size: 35px;
+line-height: 40px;
+}
+h2 {
+border-bottom: 4px solid #f7f7f7;
+padding-top: 10px;
+padding-bottom: 2px;
+font-size: 145%;
+}
+h3 {
+border-bottom: 2px solid #f7f7f7;
+padding-top: 10px;
+font-size: 120%;
+}
+h4 {
+border-bottom: 1px solid #f7f7f7;
+margin-left: 8px;
+font-size: 105%;
+}
+h5, h6 {
+border-bottom: 1px solid #ccc;
+font-size: 105%;
+}
+a {
+color: #0033dd;
+text-decoration: none;
+}
+a:hover {
+color: #6666ff; }
+a:visited {
+color: #800080; }
+a:visited:hover {
+color: #BB00BB; }
+a[href^="http:"] {
+text-decoration: underline; }
+a[href^="https:"] {
+text-decoration: underline; }
+
+code > span.kw { color: #555; font-weight: bold; } 
+code > span.dt { color: #902000; } 
+code > span.dv { color: #40a070; } 
+code > span.bn { color: #d14; } 
+code > span.fl { color: #d14; } 
+code > span.ch { color: #d14; } 
+code > span.st { color: #d14; } 
+code > span.co { color: #888888; font-style: italic; } 
+code > span.ot { color: #007020; } 
+code > span.al { color: #ff0000; font-weight: bold; } 
+code > span.fu { color: #900; font-weight: bold; } 
+code > span.er { color: #a61717; background-color: #e3d2d2; } 
+</style>
+
+
+
+
+</head>
+
+<body>
+
+
+
+
+<h1 class="title toc-ignore">Introduction to netimpute</h1>
+
+
+
+<div id="why-impute-both-sides-at-once" class="section level2">
+<h2>Why impute both sides at once</h2>
+<p>Missing data in a network study rarely stays on one side. The
+respondent who skipped half the questionnaire is often the same one
+whose nominations are missing, so the attributes you would use to impute
+the ties are themselves incomplete — and the ties you would use to
+impute the attributes are too.</p>
+<p><code>netimpute</code> runs both through a single chained-equations
+loop. Within each iteration every incomplete attribute and every
+incomplete network is visited exactly once, in one interleaved, randomly
+ordered sequence. Whatever was updated most recently — attribute or
+network — feeds the next target’s predictors. Attributes are imputed
+from the other attributes plus node-level network measures; ties are
+imputed from a dyad-level model built from the attributes and the other
+networks.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">library</span>(netimpute)</span></code></pre></div>
+</div>
+<div id="the-example-data" class="section level2">
+<h2>The example data</h2>
+<p>Thirty employees, two networks, and four attributes. Missingness is
+scattered across both sides.</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a>n <span class="ot">&lt;-</span> <span class="dv">30</span></span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a></span>
+<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a>make_net <span class="ot">&lt;-</span> <span class="cf">function</span>(p) {</span>
+<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a>  m <span class="ot">&lt;-</span> <span class="fu">matrix</span>(<span class="fu">rbinom</span>(n <span class="sc">*</span> n, <span class="dv">1</span>, p), n, n)</span>
+<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a>  <span class="fu">diag</span>(m) <span class="ot">&lt;-</span> <span class="dv">0</span></span>
+<span id="cb2-6"><a href="#cb2-6" tabindex="-1"></a>  m</span>
+<span id="cb2-7"><a href="#cb2-7" tabindex="-1"></a>}</span>
+<span id="cb2-8"><a href="#cb2-8" tabindex="-1"></a>punch <span class="ot">&lt;-</span> <span class="cf">function</span>(m, k) {</span>
+<span id="cb2-9"><a href="#cb2-9" tabindex="-1"></a>  m[<span class="fu">sample</span>(<span class="fu">which</span>(<span class="fu">row</span>(m) <span class="sc">!=</span> <span class="fu">col</span>(m)), k)] <span class="ot">&lt;-</span> <span class="cn">NA</span></span>
+<span id="cb2-10"><a href="#cb2-10" tabindex="-1"></a>  m</span>
+<span id="cb2-11"><a href="#cb2-11" tabindex="-1"></a>}</span>
+<span id="cb2-12"><a href="#cb2-12" tabindex="-1"></a></span>
+<span id="cb2-13"><a href="#cb2-13" tabindex="-1"></a>friends <span class="ot">&lt;-</span> <span class="fu">punch</span>(<span class="fu">make_net</span>(<span class="fl">0.15</span>), <span class="dv">60</span>)</span>
+<span id="cb2-14"><a href="#cb2-14" tabindex="-1"></a>advice  <span class="ot">&lt;-</span> <span class="fu">punch</span>(<span class="fu">make_net</span>(<span class="fl">0.10</span>), <span class="dv">40</span>)</span>
+<span id="cb2-15"><a href="#cb2-15" tabindex="-1"></a></span>
+<span id="cb2-16"><a href="#cb2-16" tabindex="-1"></a>staff <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
+<span id="cb2-17"><a href="#cb2-17" tabindex="-1"></a>  <span class="at">age    =</span> <span class="fu">round</span>(<span class="fu">rnorm</span>(n, <span class="dv">40</span>, <span class="dv">9</span>)),</span>
+<span id="cb2-18"><a href="#cb2-18" tabindex="-1"></a>  <span class="at">female =</span> <span class="fu">rbinom</span>(n, <span class="dv">1</span>, <span class="fl">0.5</span>),</span>
+<span id="cb2-19"><a href="#cb2-19" tabindex="-1"></a>  <span class="at">unit   =</span> <span class="fu">sample</span>(<span class="fu">c</span>(<span class="st">&quot;sales&quot;</span>, <span class="st">&quot;eng&quot;</span>, <span class="st">&quot;hr&quot;</span>), n, <span class="cn">TRUE</span>),</span>
+<span id="cb2-20"><a href="#cb2-20" tabindex="-1"></a>  <span class="at">perf   =</span> <span class="fu">rnorm</span>(n)</span>
+<span id="cb2-21"><a href="#cb2-21" tabindex="-1"></a>)</span>
+<span id="cb2-22"><a href="#cb2-22" tabindex="-1"></a>staff<span class="sc">$</span>age[<span class="fu">sample</span>(n, <span class="dv">4</span>)]  <span class="ot">&lt;-</span> <span class="cn">NA</span></span>
+<span id="cb2-23"><a href="#cb2-23" tabindex="-1"></a>staff<span class="sc">$</span>perf[<span class="fu">sample</span>(n, <span class="dv">5</span>)] <span class="ot">&lt;-</span> <span class="cn">NA</span></span>
+<span id="cb2-24"><a href="#cb2-24" tabindex="-1"></a>staff<span class="sc">$</span>unit[<span class="fu">sample</span>(n, <span class="dv">3</span>)] <span class="ot">&lt;-</span> <span class="cn">NA</span></span>
+<span id="cb2-25"><a href="#cb2-25" tabindex="-1"></a></span>
+<span id="cb2-26"><a href="#cb2-26" tabindex="-1"></a>nets <span class="ot">&lt;-</span> <span class="fu">list</span>(<span class="at">friends =</span> friends, <span class="at">advice =</span> advice)</span>
+<span id="cb2-27"><a href="#cb2-27" tabindex="-1"></a></span>
+<span id="cb2-28"><a href="#cb2-28" tabindex="-1"></a><span class="fu">colSums</span>(<span class="fu">is.na</span>(staff))</span>
+<span id="cb2-29"><a href="#cb2-29" tabindex="-1"></a><span class="co">#&gt;    age female   unit   perf </span></span>
+<span id="cb2-30"><a href="#cb2-30" tabindex="-1"></a><span class="co">#&gt;      4      0      3      5</span></span>
+<span id="cb2-31"><a href="#cb2-31" tabindex="-1"></a><span class="fu">vapply</span>(nets, <span class="cf">function</span>(m) <span class="fu">sum</span>(<span class="fu">is.na</span>(m)), <span class="fu">integer</span>(<span class="dv">1</span>))</span>
+<span id="cb2-32"><a href="#cb2-32" tabindex="-1"></a><span class="co">#&gt; friends  advice </span></span>
+<span id="cb2-33"><a href="#cb2-33" tabindex="-1"></a><span class="co">#&gt;      60      40</span></span></code></pre></div>
+</div>
+<div id="a-first-imputation" class="section level2">
+<h2>A first imputation</h2>
+<p><code>netmice()</code> is the entry point. <code>m</code> is the
+number of imputed datasets, <code>maxit</code> the number of iterations
+per chain — the same meaning they have in <code>mice</code>.</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a>fit <span class="ot">&lt;-</span> <span class="fu">netmice</span>(staff, nets, <span class="at">m =</span> <span class="dv">5</span>, <span class="at">maxit =</span> <span class="dv">10</span>, <span class="at">seed =</span> <span class="dv">1</span>, <span class="at">printFlag =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a><span class="co">#&gt; netimpute: inferred attribute types -&gt; age = continuous, female = binary, unit = multinomial, perf = continuous</span></span>
+<span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a><span class="co">#&gt; Warning: netimpute: 11 tracked quantity/quantities have R-hat &gt; 1.05, so the</span></span>
+<span id="cb3-4"><a href="#cb3-4" tabindex="-1"></a><span class="co">#&gt; chains have not converged: perf (variance) = 1.451, advice (transitivity) =</span></span>
+<span id="cb3-5"><a href="#cb3-5" tabindex="-1"></a><span class="co">#&gt; 1.382, friends (reciprocity) = 1.362, perf (mean) = 1.330, age (mean) = 1.315,</span></span>
+<span id="cb3-6"><a href="#cb3-6" tabindex="-1"></a><span class="co">#&gt; and 6 more. Increase `maxit` (currently 10) and refit.</span></span>
+<span id="cb3-7"><a href="#cb3-7" tabindex="-1"></a>fit</span>
+<span id="cb3-8"><a href="#cb3-8" tabindex="-1"></a><span class="co">#&gt; Class: netmids</span></span>
+<span id="cb3-9"><a href="#cb3-9" tabindex="-1"></a><span class="co">#&gt; Imputations (m): 5   Iterations (maxit): 10   Method: pmm   Donors: 5   Cores: 1 </span></span>
+<span id="cb3-10"><a href="#cb3-10" tabindex="-1"></a><span class="co">#&gt; Variables with missingness: age, unit, perf </span></span>
+<span id="cb3-11"><a href="#cb3-11" tabindex="-1"></a><span class="co">#&gt; Networks with missingness: friends, advice </span></span>
+<span id="cb3-12"><a href="#cb3-12" tabindex="-1"></a><span class="co">#&gt; Network-tie updating: sequential Gibbs (single-tie draws with change statistics)</span></span>
+<span id="cb3-13"><a href="#cb3-13" tabindex="-1"></a><span class="co">#&gt; Convergence (R-hat): max 1.451 (perf (variance)) - 11 above 1.05 - increase maxit</span></span></code></pre></div>
+<p>The message about inferred attribute types is worth reading:
+<code>netimpute</code> decides whether each column is continuous,
+binary, or multinomial, and that decision drives both how the column is
+imputed and what its predictor terms are called. Override it with
+<code>attr_types</code> if it guesses wrong.</p>
+<p><code>complete_netmice()</code> extracts one completed dataset —
+attributes and networks together.</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a>done <span class="ot">&lt;-</span> <span class="fu">complete_netmice</span>(fit, <span class="dv">1</span>)</span>
+<span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a><span class="fu">str</span>(done<span class="sc">$</span>data)</span>
+<span id="cb4-3"><a href="#cb4-3" tabindex="-1"></a><span class="co">#&gt; &#39;data.frame&#39;:    30 obs. of  4 variables:</span></span>
+<span id="cb4-4"><a href="#cb4-4" tabindex="-1"></a><span class="co">#&gt;  $ age   : num  27 45 42 49 52 49 31 42 36 46 ...</span></span>
+<span id="cb4-5"><a href="#cb4-5" tabindex="-1"></a><span class="co">#&gt;  $ female: int  0 1 1 0 0 0 1 1 0 1 ...</span></span>
+<span id="cb4-6"><a href="#cb4-6" tabindex="-1"></a><span class="co">#&gt;  $ unit  : chr  &quot;sales&quot; &quot;hr&quot; &quot;eng&quot; &quot;sales&quot; ...</span></span>
+<span id="cb4-7"><a href="#cb4-7" tabindex="-1"></a><span class="co">#&gt;  $ perf  : num  -0.533 0.147 0.465 0.209 -0.643 ...</span></span>
+<span id="cb4-8"><a href="#cb4-8" tabindex="-1"></a><span class="fu">sum</span>(<span class="fu">is.na</span>(done<span class="sc">$</span>networks<span class="sc">$</span>friends))</span>
+<span id="cb4-9"><a href="#cb4-9" tabindex="-1"></a><span class="co">#&gt; [1] 0</span></span></code></pre></div>
+</div>
+<div id="checking-convergence" class="section level2">
+<h2>Checking convergence</h2>
+<p><code>plot()</code> shows the usual chain diagnostics on three pages:
+the mean and variance of the imputed values per iteration for each
+attribute; density, reciprocity, transitivity, isolate count and average
+inverse geodesic distance for each network; and, for each network that
+had missing ties, the mean and variance of the <em>imputed ties
+only</em>. You are looking for the chains to mix, not to trend.</p>
+<p>Read the third page first. The network diagnostics on the second page
+are computed on the whole completed network, observed ties included, so
+they are diluted by the missingness fraction: with 7% of dyads missing,
+a swing of 0.20 in the density of the imputed cells shows up as a
+movement of only about 0.014 in the network’s overall density. A flat
+trace on page two is therefore <em>not</em> evidence of convergence when
+missingness is low — the imputed-tie traces are the sensitive ones, and
+they are what the attribute page has always shown for attributes.</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a><span class="fu">plot</span>(fit, <span class="at">nets =</span> <span class="st">&quot;friends&quot;</span>, <span class="at">ask =</span> <span class="cn">FALSE</span>)</span></code></pre></div>
+<p><img role="img" aria-label="Convergence diagnostics across iterations" src="data:image/png;base64,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" alt="Convergence diagnostics across iterations" /><img role="img" aria-label="Convergence diagnostics across iterations" src="data:image/png;base64,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" alt="Convergence diagnostics across iterations" /><img role="img" aria-label="Convergence diagnostics across iterations" src="data:image/png;base64,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" alt="Convergence diagnostics across iterations" /></p>
+<p>If the imputed-tie traces are still drifting at the last iteration,
+raise <code>maxit</code>. A steadily climbing imputed-tie mean is the
+signature of tie inflation specifically, rather than of slow mixing in
+general.</p>
+<p>The numbers behind the plots are on the fitted object:
+<code>chainMean</code>/<code>chainVar</code> for attributes,
+<code>netChain</code> for the whole-network diagnostics, and
+<code>netImpMean</code>/<code>netImpVar</code> for the imputed ties.</p>
+<div id="r-hat" class="section level3">
+<h3>R-hat</h3>
+<p><code>netmice()</code> also computes rank-normalized split-R-hat for
+every one of those quantities, after discarding the first half of the
+iterations. R-hat compares the variance <em>between</em> chains to the
+variance <em>within</em> them: at convergence the chains are exploring
+the same distribution and the ratio approaches 1. Anything above 1.05
+gets a warning naming the culprits.</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a><span class="fu">round</span>(<span class="fu">sort</span>(fit<span class="sc">$</span>rhat, <span class="at">decreasing =</span> <span class="cn">TRUE</span>), <span class="dv">3</span>)</span>
+<span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a><span class="co">#&gt;                  perf (variance)            advice (transitivity) </span></span>
+<span id="cb6-3"><a href="#cb6-3" tabindex="-1"></a><span class="co">#&gt;                            1.451                            1.382 </span></span>
+<span id="cb6-4"><a href="#cb6-4" tabindex="-1"></a><span class="co">#&gt;            friends (reciprocity)                      perf (mean) </span></span>
+<span id="cb6-5"><a href="#cb6-5" tabindex="-1"></a><span class="co">#&gt;                            1.362                            1.330 </span></span>
+<span id="cb6-6"><a href="#cb6-6" tabindex="-1"></a><span class="co">#&gt;                       age (mean)                  unit (variance) </span></span>
+<span id="cb6-7"><a href="#cb6-7" tabindex="-1"></a><span class="co">#&gt;                            1.315                            1.299 </span></span>
+<span id="cb6-8"><a href="#cb6-8" tabindex="-1"></a><span class="co">#&gt;           friends (transitivity)             advice (reciprocity) </span></span>
+<span id="cb6-9"><a href="#cb6-9" tabindex="-1"></a><span class="co">#&gt;                            1.266                            1.212 </span></span>
+<span id="cb6-10"><a href="#cb6-10" tabindex="-1"></a><span class="co">#&gt;       friends (avg_inv_geodesic)        advice (avg_inv_geodesic) </span></span>
+<span id="cb6-11"><a href="#cb6-11" tabindex="-1"></a><span class="co">#&gt;                            1.198                            1.115 </span></span>
+<span id="cb6-12"><a href="#cb6-12" tabindex="-1"></a><span class="co">#&gt;                   age (variance)                      unit (mean) </span></span>
+<span id="cb6-13"><a href="#cb6-13" tabindex="-1"></a><span class="co">#&gt;                            1.104                            1.047 </span></span>
+<span id="cb6-14"><a href="#cb6-14" tabindex="-1"></a><span class="co">#&gt;                 advice (density)      advice (imputed ties, mean) </span></span>
+<span id="cb6-15"><a href="#cb6-15" tabindex="-1"></a><span class="co">#&gt;                            1.017                            1.017 </span></span>
+<span id="cb6-16"><a href="#cb6-16" tabindex="-1"></a><span class="co">#&gt;  advice (imputed ties, variance) friends (imputed ties, variance) </span></span>
+<span id="cb6-17"><a href="#cb6-17" tabindex="-1"></a><span class="co">#&gt;                            1.017                            0.948 </span></span>
+<span id="cb6-18"><a href="#cb6-18" tabindex="-1"></a><span class="co">#&gt;                friends (density)     friends (imputed ties, mean) </span></span>
+<span id="cb6-19"><a href="#cb6-19" tabindex="-1"></a><span class="co">#&gt;                            0.892                            0.892</span></span></code></pre></div>
+<p>Two things to keep in mind when reading it. Constant traces give
+<code>NA</code> rather than a number — an isolate count that never moves
+has no within-chain variance to compare against, and that is not a
+failure. And R-hat is a large-sample statistic: at
+<code>maxit = 10</code> the burn-in leaves five iterations, which
+split-R-hat halves again to between two and three draws per half-chain.
+That is far too few to trust, in either direction, and
+<code>netmice()</code> says so. If you intend to take R-hat seriously,
+use a <code>maxit</code> in the low hundreds; the default of 20 is
+chosen for the trace plots, not for this.</p>
+</div>
+</div>
+<div id="using-the-completed-data" class="section level2">
+<h2>Using the completed data</h2>
+<p>There is no pooling helper: fit your model to each completed dataset
+and pool with <code>mice::pool()</code>. Anything you derive from the
+imputed networks — degree, centrality, a contagion term — is computed
+inside the loop, so its uncertainty flows into the pooled standard
+errors.</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a>fits <span class="ot">&lt;-</span> <span class="fu">lapply</span>(<span class="fu">seq_len</span>(fit<span class="sc">$</span>m), <span class="cf">function</span>(k) {</span>
+<span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a>  d <span class="ot">&lt;-</span> <span class="fu">complete_netmice</span>(fit, k)</span>
+<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a>  d<span class="sc">$</span>data<span class="sc">$</span>friends_indeg <span class="ot">&lt;-</span> <span class="fu">colSums</span>(d<span class="sc">$</span>networks<span class="sc">$</span>friends)</span>
+<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a>  <span class="fu">lm</span>(perf <span class="sc">~</span> age <span class="sc">+</span> friends_indeg, <span class="at">data =</span> d<span class="sc">$</span>data)</span>
+<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a>})</span>
+<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a></span>
+<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a><span class="fu">summary</span>(mice<span class="sc">::</span><span class="fu">pool</span>(fits))</span>
+<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a><span class="co">#&gt;            term    estimate  std.error  statistic       df   p.value</span></span>
+<span id="cb7-9"><a href="#cb7-9" tabindex="-1"></a><span class="co">#&gt; 1   (Intercept)  0.58069171 1.14476095  0.5072602 21.08858 0.6172359</span></span>
+<span id="cb7-10"><a href="#cb7-10" tabindex="-1"></a><span class="co">#&gt; 2           age -0.01154801 0.02517817 -0.4586516 21.48702 0.6510899</span></span>
+<span id="cb7-11"><a href="#cb7-11" tabindex="-1"></a><span class="co">#&gt; 3 friends_indeg -0.08752156 0.09124524 -0.9591905 13.20365 0.3546988</span></span></code></pre></div>
+</div>
+<div id="predictor-names-the-one-thing-to-get-right" class="section level2">
+<h2>Predictor names: the one thing to get right</h2>
+<p>If you want to steer the imputation models yourself, you need the
+names of the internally generated terms — and the naming rule depends on
+the attribute type. <strong>Continuous</strong> attributes get bare
+<code>_ego</code> / <code>_alter</code> / <code>_absdiff</code> terms.
+<strong>Binary and multinomial</strong> attributes are dummy-coded, one
+term per non-reference level.</p>
+<p>Rather than guessing, list them. <code>dyad_regression()</code>
+builds exactly the design <code>netmice()</code> uses at a network
+visit, and <code>fit = FALSE</code> stops before fitting:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a>terms <span class="ot">&lt;-</span> <span class="fu">names</span>(<span class="fu">dyad_regression</span>(nets, staff, <span class="at">target =</span> <span class="st">&quot;friends&quot;</span>,</span>
+<span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a>                               <span class="at">fit =</span> <span class="cn">FALSE</span>)<span class="sc">$</span>data)</span>
+<span id="cb8-3"><a href="#cb8-3" tabindex="-1"></a><span class="co">#&gt; netimpute: inferred attribute types -&gt; age = continuous, female = binary, unit = multinomial, perf = continuous</span></span>
+<span id="cb8-4"><a href="#cb8-4" tabindex="-1"></a><span class="fu">setdiff</span>(terms, <span class="fu">c</span>(<span class="st">&quot;i&quot;</span>, <span class="st">&quot;j&quot;</span>, <span class="st">&quot;y&quot;</span>))</span>
+<span id="cb8-5"><a href="#cb8-5" tabindex="-1"></a><span class="co">#&gt;  [1] &quot;reciprocity&quot;         &quot;twopath&quot;             &quot;age_ego&quot;            </span></span>
+<span id="cb8-6"><a href="#cb8-6" tabindex="-1"></a><span class="co">#&gt;  [4] &quot;age_alter&quot;           &quot;age_absdiff&quot;         &quot;female_ego_1&quot;       </span></span>
+<span id="cb8-7"><a href="#cb8-7" tabindex="-1"></a><span class="co">#&gt;  [7] &quot;female_alter_1&quot;      &quot;female_same&quot;         &quot;unit_ego_hr&quot;        </span></span>
+<span id="cb8-8"><a href="#cb8-8" tabindex="-1"></a><span class="co">#&gt; [10] &quot;unit_alter_hr&quot;       &quot;unit_ego_sales&quot;      &quot;unit_alter_sales&quot;   </span></span>
+<span id="cb8-9"><a href="#cb8-9" tabindex="-1"></a><span class="co">#&gt; [13] &quot;unit_same&quot;           &quot;perf_ego&quot;            &quot;perf_alter&quot;         </span></span>
+<span id="cb8-10"><a href="#cb8-10" tabindex="-1"></a><span class="co">#&gt; [16] &quot;perf_absdiff&quot;        &quot;advice_tie&quot;          &quot;advice_recip&quot;       </span></span>
+<span id="cb8-11"><a href="#cb8-11" tabindex="-1"></a><span class="co">#&gt; [19] &quot;advice_ego_outdeg&quot;   &quot;advice_ego_indeg&quot;    &quot;advice_alter_indeg&quot; </span></span>
+<span id="cb8-12"><a href="#cb8-12" tabindex="-1"></a><span class="co">#&gt; [22] &quot;advice_alter_outdeg&quot;</span></span></code></pre></div>
+<p>Note the difference between <code>age</code> (continuous) and
+<code>female</code> / <code>unit</code> (categorical):</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a><span class="fu">grep</span>(<span class="st">&quot;^age&quot;</span>,    terms, <span class="at">value =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a><span class="co">#&gt; [1] &quot;age_ego&quot;     &quot;age_alter&quot;   &quot;age_absdiff&quot;</span></span>
+<span id="cb9-3"><a href="#cb9-3" tabindex="-1"></a><span class="fu">grep</span>(<span class="st">&quot;^female&quot;</span>, terms, <span class="at">value =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb9-4"><a href="#cb9-4" tabindex="-1"></a><span class="co">#&gt; [1] &quot;female_ego_1&quot;   &quot;female_alter_1&quot; &quot;female_same&quot;</span></span>
+<span id="cb9-5"><a href="#cb9-5" tabindex="-1"></a><span class="fu">grep</span>(<span class="st">&quot;^unit&quot;</span>,   terms, <span class="at">value =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb9-6"><a href="#cb9-6" tabindex="-1"></a><span class="co">#&gt; [1] &quot;unit_ego_hr&quot;      &quot;unit_alter_hr&quot;    &quot;unit_ego_sales&quot;   &quot;unit_alter_sales&quot;</span></span>
+<span id="cb9-7"><a href="#cb9-7" tabindex="-1"></a><span class="co">#&gt; [5] &quot;unit_same&quot;</span></span></code></pre></div>
+<p><code>female</code> is 0/1, so it is inferred as
+<strong>binary</strong> and its term is <code>female_ego_1</code> — not
+<code>female_ego</code>. Had it been coded
+<code>&quot;m&quot;</code>/<code>&quot;f&quot;</code>, the term would be
+<code>female_ego_m</code> or <code>female_ego_f</code>, depending on
+which level sorts first and becomes the reference. This is the most
+common source of “why doesn’t my <code>models</code> formula work”.</p>
+<p>The node-level names an <em>attribute</em> model can reference come
+from <code>net_measures()</code>, prefixed with the network name when
+more than one network is supplied:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a>g <span class="ot">&lt;-</span> igraph<span class="sc">::</span><span class="fu">graph_from_adjacency_matrix</span>(</span>
+<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a>  <span class="fu">replace</span>(friends, <span class="fu">is.na</span>(friends), <span class="dv">0</span>), <span class="at">mode =</span> <span class="st">&quot;directed&quot;</span>, <span class="at">diag =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb10-3"><a href="#cb10-3" tabindex="-1"></a><span class="fu">head</span>(<span class="fu">names</span>(<span class="fu">net_measures</span>(g, staff)), <span class="dv">12</span>)</span>
+<span id="cb10-4"><a href="#cb10-4" tabindex="-1"></a><span class="co">#&gt; netimpute: inferred attribute types -&gt; age = continuous, female = binary, unit = multinomial, perf = continuous</span></span>
+<span id="cb10-5"><a href="#cb10-5" tabindex="-1"></a><span class="co">#&gt;  [1] &quot;node_id&quot;            &quot;outdegree&quot;          &quot;indegree&quot;          </span></span>
+<span id="cb10-6"><a href="#cb10-6" tabindex="-1"></a><span class="co">#&gt;  [4] &quot;reciprocity_ratio&quot;  &quot;bonacich_power&quot;     &quot;betweenness&quot;       </span></span>
+<span id="cb10-7"><a href="#cb10-7" tabindex="-1"></a><span class="co">#&gt;  [7] &quot;isolate&quot;            &quot;constraint&quot;         &quot;harmonic_closeness&quot;</span></span>
+<span id="cb10-8"><a href="#cb10-8" tabindex="-1"></a><span class="co">#&gt; [10] &quot;local_clustering&quot;   &quot;age_diff_out&quot;       &quot;age_diff_in&quot;</span></span></code></pre></div>
+<p>Both lists are reproduced in full in the “Dyad-level term names” and
+“Implemented network measures” sections of <code>?netmice</code>.</p>
+</div>
+<div id="steering-the-models" class="section level2">
+<h2>Steering the models</h2>
+<p>When <code>models</code> is left <code>NULL</code>,
+<code>netmice()</code> builds each imputation model automatically and
+prints a one-off reminder that specifying them is better. That advice is
+not boilerplate. An imputation model has to be at least as rich as the
+analysis model you intend to fit: if you will estimate an
+<code>age * female</code> interaction but impute without one, the
+imputations are drawn from a model in which that interaction is zero,
+and the pooled estimate is biased toward the null no matter how large
+<code>m</code> is. This is the congeniality requirement of Meng (1994,
+<em>Statistical Science</em> 9(4), 538–558); for the network case see
+Krause, Huisman, Steglich &amp; Snijders (2020, <em>Social Networks</em>
+62, 99–112).</p>
+<p><code>models</code> protects a hypothesised relationship: the terms
+you name always enter that target’s imputation model, whatever the
+automatic predictor machinery decides. Formulas are given as strings;
+the left-hand side names the target.</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a>fit2 <span class="ot">&lt;-</span> <span class="fu">netmice</span>(</span>
+<span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a>  staff, nets, <span class="at">m =</span> <span class="dv">5</span>, <span class="at">maxit =</span> <span class="dv">10</span>, <span class="at">seed =</span> <span class="dv">1</span>, <span class="at">printFlag =</span> <span class="cn">FALSE</span>,</span>
+<span id="cb11-3"><a href="#cb11-3" tabindex="-1"></a>  <span class="at">models =</span> <span class="fu">list</span>(</span>
+<span id="cb11-4"><a href="#cb11-4" tabindex="-1"></a>    <span class="st">&quot;friends ~ female_ego_1:reciprocity&quot;</span>,</span>
+<span id="cb11-5"><a href="#cb11-5" tabindex="-1"></a>    <span class="st">&quot;perf    ~ age + friends_indegree&quot;</span></span>
+<span id="cb11-6"><a href="#cb11-6" tabindex="-1"></a>  )</span>
+<span id="cb11-7"><a href="#cb11-7" tabindex="-1"></a>)</span>
+<span id="cb11-8"><a href="#cb11-8" tabindex="-1"></a><span class="co">#&gt; netimpute: inferred attribute types -&gt; age = continuous, female = binary, unit = multinomial, perf = continuous</span></span>
+<span id="cb11-9"><a href="#cb11-9" tabindex="-1"></a><span class="co">#&gt; Warning: netimpute: 9 tracked quantity/quantities have R-hat &gt; 1.05, so the</span></span>
+<span id="cb11-10"><a href="#cb11-10" tabindex="-1"></a><span class="co">#&gt; chains have not converged: unit (variance) = 1.273, perf (mean) = 1.270,</span></span>
+<span id="cb11-11"><a href="#cb11-11" tabindex="-1"></a><span class="co">#&gt; friends (transitivity) = 1.256, friends (avg_inv_geodesic) = 1.213, advice</span></span>
+<span id="cb11-12"><a href="#cb11-12" tabindex="-1"></a><span class="co">#&gt; (reciprocity) = 1.112, and 4 more. Increase `maxit` (currently 10) and refit.</span></span></code></pre></div>
+<p>The first formula is an interaction between an ego attribute and
+reciprocity: <em>do women reciprocate friendship nominations
+differently?</em> Under the default tie-wise updater
+(<code>net_update = &quot;gibbs&quot;</code>) the reciprocity factor in that
+interaction is re-read from the live network after <strong>every single
+tie draw</strong>, not held at its value from the start of the visit —
+which is what makes an endogenous interaction meaningful here.</p>
+<p>That sweep over the missing cells is repeated <code>net_sweeps</code>
+times per visit (default 5), each pass in a fresh random order and
+conditioning on every tie drawn so far. The working model is fitted once
+per visit and its coefficients reused across the passes, so
+<code>net_sweeps</code> controls how far the network mixes toward the
+distribution those coefficients imply, while <code>maxit</code> controls
+the outer chain and is where they are re-estimated.</p>
+<p>The endogenous terms themselves are configurable with
+<code>net_endo_terms</code>. Alongside <code>reciprocity</code> and the
+bounded <code>twopath</code> indicator, binary targets can use the
+geometrically weighted ERGM change statistics <code>gwesp</code>,
+<code>gwodegree</code> and <code>gwidegree</code> — each the movement in
+the corresponding network statistic if the cell went from 0 to 1,
+evaluated with that cell removed, so the degree terms cannot include the
+tie being imputed in their own predictor. They are off by default:
+<code>twopath</code> is bounded by 1 while <code>gwesp</code> is bounded
+by <code>exp(decay) + 2(n - 2)</code>, and on sparse networks a positive
+coefficient on it generates far too many ties. Check the imputed tie
+rate against the observed density before adopting them.</p>
+</div>
+<div id="leaner-models" class="section level2">
+<h2>Leaner models</h2>
+<p>By default every attribute and every network feature is a candidate
+predictor, with a PCA safeguard if that gets too wide for the number of
+observed cases. <code>netquickpred()</code> instead screens predictors
+per target by correlation, adds predictors-of-predictors recursively,
+and prunes collinear survivors.</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" tabindex="-1"></a>qp <span class="ot">&lt;-</span> <span class="fu">netquickpred</span>(staff, nets)</span>
+<span id="cb12-2"><a href="#cb12-2" tabindex="-1"></a><span class="co">#&gt; netimpute: inferred attribute types -&gt; age = continuous, female = binary, unit = multinomial, perf = continuous</span></span>
+<span id="cb12-3"><a href="#cb12-3" tabindex="-1"></a>qp</span>
+<span id="cb12-4"><a href="#cb12-4" tabindex="-1"></a><span class="co">#&gt; Class: netquickpred (per-target predictor selection)</span></span>
+<span id="cb12-5"><a href="#cb12-5" tabindex="-1"></a><span class="co">#&gt; mincor: 0.1  steps: 3  collinearity: pairwise (threshold 0.9)  missingness screen: TRUE </span></span>
+<span id="cb12-6"><a href="#cb12-6" tabindex="-1"></a><span class="co">#&gt; Targets: age, unit, perf, friends, advice </span></span>
+<span id="cb12-7"><a href="#cb12-7" tabindex="-1"></a><span class="co">#&gt; - age (attribute): 3 attribute(s) + 40 network feature(s)</span></span>
+<span id="cb12-8"><a href="#cb12-8" tabindex="-1"></a><span class="co">#&gt;     unit [step 1], perf [step 1], female [step 2], friends_outdegree [step 1], friends_indegree [step 1], friends_reciprocity_ratio [step 1], friends_betweenness [step 1], friends_harmonic_closeness [step 1], friends_age_alter_mean_in [step 1], friends_age_alter_mean_out [step 1], friends_age_alter_min [step 1], friends_age_alter_max [step 1], friends_female_ei_index [step 1], friends_female_blau_index [step 1], friends_female_alter_mode [step 1], friends_unit_ei_index [step 1], friends_unit_alter_mode [step 1], friends_perf_diff_out [step 1], friends_perf_diff_in [step 1], friends_perf_alter_mean [step 1], friends_perf_alter_mean_in [step 1], friends_perf_alter_mean_out [step 1], friends_perf_alter_min [step 1], friends_perf_alter_max [step 1], advice_indegree [step 1], advice_reciprocity_ratio [step 1], advice_bonacich_power [step 1], advice_betweenness [step 1], advice_harmonic_closeness [step 1], advice_local_clustering [step 1], advice_age_alter_mean [step 1], advice_age_alter_mean_in [step 1], advice_age_alter_min [step 1], advice_age_alter_max [step 1], advice_female_ei_index [step 1], advice_female_blau_index [step 1], advice_female_alter_mode [step 1], advice_unit_ei_index [step 1], advice_unit_blau_index [step 1], advice_unit_alter_mode [step 1], advice_perf_diff_out [step 1], advice_perf_diff_in [step 1], advice_perf_alter_mean_out [step 1]</span></span>
+<span id="cb12-9"><a href="#cb12-9" tabindex="-1"></a><span class="co">#&gt; - unit (attribute): 3 attribute(s) + 50 network feature(s)</span></span>
+<span id="cb12-10"><a href="#cb12-10" tabindex="-1"></a><span class="co">#&gt;     age [step 1], female [step 1], perf [step 1], friends_outdegree [step 1], friends_indegree [step 1], friends_reciprocity_ratio [step 1], friends_betweenness [step 1], friends_constraint [step 1], friends_harmonic_closeness [step 1], friends_local_clustering [step 1], friends_age_diff_out [step 1], friends_age_diff_in [step 1], friends_age_alter_mean [step 1], friends_age_alter_mean_in [step 1], friends_age_alter_mean_out [step 1], friends_age_alter_min [step 1], friends_age_alter_max [step 1], friends_female_ei_index [step 1], friends_female_blau_index [step 1], friends_female_alter_mode [step 1], friends_unit_blau_index [step 1], friends_unit_alter_mode [step 1], friends_perf_diff_out [step 1], friends_perf_diff_in [step 1], friends_perf_alter_mean_in [step 1], friends_perf_alter_mean_out [step 1], friends_perf_alter_min [step 1], friends_perf_alter_max [step 1], advice_outdegree [step 1], advice_indegree [step 1], advice_reciprocity_ratio [step 1], advice_betweenness [step 1], advice_constraint [step 1], advice_harmonic_closeness [step 1], advice_local_clustering [step 1], advice_age_diff_out [step 1], advice_age_diff_in [step 1], advice_age_alter_mean [step 1], advice_age_alter_mean_in [step 1], advice_age_alter_mean_out [step 1], advice_age_alter_min [step 1], advice_age_alter_max [step 1], advice_female_ei_index [step 1], advice_female_blau_index [step 1], advice_female_alter_mode [step 1], advice_unit_blau_index [step 1], advice_unit_alter_mode [step 1], advice_perf_diff_out [step 1], advice_perf_diff_in [step 1], advice_perf_alter_mean_in [step 1], advice_perf_alter_mean_out [step 1], advice_perf_alter_min [step 1], advice_perf_alter_max [step 1]</span></span>
+<span id="cb12-11"><a href="#cb12-11" tabindex="-1"></a><span class="co">#&gt; - perf (attribute): 3 attribute(s) + 44 network feature(s)</span></span>
+<span id="cb12-12"><a href="#cb12-12" tabindex="-1"></a><span class="co">#&gt;     age [step 1], female [step 1], unit [step 1], friends_indegree [step 1], friends_reciprocity_ratio [step 1], friends_bonacich_power [step 1], friends_betweenness [step 1], friends_local_clustering [step 1], friends_age_diff_out [step 1], friends_age_diff_in [step 1], friends_age_alter_mean [step 1], friends_age_alter_mean_in [step 1], friends_age_alter_mean_out [step 1], friends_age_alter_min [step 1], friends_female_ei_index [step 1], friends_female_alter_mode [step 1], friends_unit_ei_index [step 1], friends_unit_blau_index [step 1], friends_unit_alter_mode [step 1], friends_perf_alter_mean [step 1], friends_perf_alter_mean_in [step 1], friends_perf_alter_mean_out [step 1], friends_perf_alter_min [step 1], friends_perf_alter_max [step 1], advice_outdegree [step 1], advice_indegree [step 1], advice_reciprocity_ratio [step 1], advice_constraint [step 1], advice_harmonic_closeness [step 1], advice_age_diff_out [step 1], advice_age_diff_in [step 1], advice_age_alter_mean [step 1], advice_age_alter_mean_in [step 1], advice_age_alter_mean_out [step 1], advice_age_alter_min [step 1], advice_age_alter_max [step 1], advice_female_ei_index [step 1], advice_female_blau_index [step 1], advice_female_alter_mode [step 1], advice_unit_ei_index [step 1], advice_unit_blau_index [step 1], advice_unit_alter_mode [step 1], advice_perf_alter_mean [step 1], advice_perf_alter_mean_in [step 1], advice_perf_alter_mean_out [step 1], advice_perf_alter_min [step 1], advice_perf_alter_max [step 1]</span></span>
+<span id="cb12-13"><a href="#cb12-13" tabindex="-1"></a><span class="co">#&gt; - friends (network): 2 dyad term(s)</span></span>
+<span id="cb12-14"><a href="#cb12-14" tabindex="-1"></a><span class="co">#&gt;     reciprocity, twopath</span></span>
+<span id="cb12-15"><a href="#cb12-15" tabindex="-1"></a><span class="co">#&gt; - advice (network): 2 dyad term(s)</span></span>
+<span id="cb12-16"><a href="#cb12-16" tabindex="-1"></a><span class="co">#&gt;     reciprocity, twopath</span></span></code></pre></div>
+<p>Pass it straight to <code>netmice()</code>, or use
+<code>predictor_selection = &quot;quickpred&quot;</code> to have it computed
+internally:</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a>fit3 <span class="ot">&lt;-</span> <span class="fu">netmice</span>(staff, nets, <span class="at">m =</span> <span class="dv">5</span>, <span class="at">maxit =</span> <span class="dv">10</span>, <span class="at">seed =</span> <span class="dv">1</span>, <span class="at">printFlag =</span> <span class="cn">FALSE</span>,</span>
+<span id="cb13-2"><a href="#cb13-2" tabindex="-1"></a>                <span class="at">predictor_selection =</span> qp)</span>
+<span id="cb13-3"><a href="#cb13-3" tabindex="-1"></a><span class="co">#&gt; netimpute: inferred attribute types -&gt; age = continuous, female = binary, unit = multinomial, perf = continuous</span></span>
+<span id="cb13-4"><a href="#cb13-4" tabindex="-1"></a><span class="co">#&gt; Warning: netimpute: 6 tracked quantity/quantities have R-hat &gt; 1.05, so the</span></span>
+<span id="cb13-5"><a href="#cb13-5" tabindex="-1"></a><span class="co">#&gt; chains have not converged: unit (mean) = 1.251, advice (avg_inv_geodesic) =</span></span>
+<span id="cb13-6"><a href="#cb13-6" tabindex="-1"></a><span class="co">#&gt; 1.207, advice (transitivity) = 1.153, advice (reciprocity) = 1.143, friends</span></span>
+<span id="cb13-7"><a href="#cb13-7" tabindex="-1"></a><span class="co">#&gt; (reciprocity) = 1.129, and 1 more. Increase `maxit` (currently 10) and refit.</span></span></code></pre></div>
+<div id="selection-and-the-pca-budget-interact" class="section level3">
+<h3>Selection and the PCA budget interact</h3>
+<p>Selection does not switch the PCA off. The <code>PCA</code> budget
+applies <em>on top</em> of whatever <code>netquickpred()</code> keeps,
+so the two have to be set with each other in mind.
+<code>PCA$ratio</code> is counted against observed rows — or, for a
+binary target, observed <em>events</em> — and at ordinary network sizes
+that is a much smaller number than the <code>mincor</code> screen leaves
+behind. When that happens the selected variables are still collapsed
+into components, and selection has changed <em>which</em> variables form
+them rather than whether components are used at all.</p>
+<p><code>netmice()</code> says so when it happens, once per call:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" tabindex="-1"></a><span class="fu">invisible</span>(<span class="fu">netmice</span>(staff, nets, <span class="at">predictor_selection =</span> <span class="st">&quot;quickpred&quot;</span>,</span>
+<span id="cb14-2"><a href="#cb14-2" tabindex="-1"></a>                  <span class="at">m =</span> <span class="dv">1</span>, <span class="at">maxit =</span> <span class="dv">2</span>, <span class="at">seed =</span> <span class="dv">1</span>, <span class="at">printFlag =</span> <span class="cn">TRUE</span>))</span>
+<span id="cb14-3"><a href="#cb14-3" tabindex="-1"></a><span class="co">#&gt; netimpute: `id` is not set, so the rows and columns of every network are assumed to be in the same order as the rows of `data`. Supply `id` to match by name instead.</span></span>
+<span id="cb14-4"><a href="#cb14-4" tabindex="-1"></a><span class="co">#&gt; netimpute: inferred attribute types -&gt; age = continuous, female = binary, unit = multinomial, perf = continuous</span></span>
+<span id="cb14-5"><a href="#cb14-5" tabindex="-1"></a><span class="co">#&gt; netimpute: `models` is NULL, so every imputation model is built automatically from the available predictors. Supplying `models` is recommended: an imputation model should be at least as rich as the analysis model you intend to fit - one that omits its interactions or non-linearities biases the pooled estimates toward the null (the congeniality requirement; Meng, 1994, Statistical Science 9(4), 538-558). For the network case see Krause, Huisman, Steglich &amp; Snijders (2020, Social Networks 62, 99-112). This note is shown once per session; `printFlag = FALSE` silences it.</span></span>
+<span id="cb14-6"><a href="#cb14-6" tabindex="-1"></a><span class="co">#&gt;  imputation 1 - iter 1 - order: perf -&gt; unit -&gt; friends -&gt; age -&gt; advice</span></span>
+<span id="cb14-7"><a href="#cb14-7" tabindex="-1"></a><span class="co">#&gt; netimpute: `predictor_selection` still leaves more predictors than the `PCA` budget for: perf (50 selected vs budget 2), unit (55 selected vs budget 2), age (46 selected vs budget 2). Those models are fitted on principal components, not on the selected variables&#39; own coefficients - selection changed which variables form the components, not whether components are used. Raise `mincor` to select fewer predictors, or widen the budget with a smaller `PCA$ratio` (or an explicit `PCA$n`).</span></span>
+<span id="cb14-8"><a href="#cb14-8" tabindex="-1"></a><span class="co">#&gt;  imputation 1 - iter 2 - order: perf -&gt; unit -&gt; friends -&gt; age -&gt; advice</span></span></code></pre></div>
+<p>If you want named coefficients for the variables you selected, either
+raise <code>mincor</code> until the selection fits, or widen the budget
+— a <em>smaller</em> <code>PCA$ratio</code>, or an explicit
+<code>PCA$n</code>. Note that raising <code>mincor</code> far enough to
+matter can push it above the chance-correlation floor at small <span class="math inline">\(n\)</span>, so check what survives before relying
+on it.</p>
+</div>
+</div>
+<div id="constraints-on-where-ties-can-exist" class="section level2">
+<h2>Constraints on where ties can exist</h2>
+<p><code>structural</code> marks cells that are zero <em>by design</em>
+— nominations that could not have been made, such as ties into another
+school class. They are fixed at zero, excluded from the model, and never
+imputed.</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" tabindex="-1"></a>structural <span class="ot">&lt;-</span> <span class="fu">matrix</span>(<span class="cn">FALSE</span>, n, n)</span>
+<span id="cb15-2"><a href="#cb15-2" tabindex="-1"></a>structural[<span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>, <span class="dv">11</span><span class="sc">:</span><span class="dv">30</span>] <span class="ot">&lt;-</span> <span class="cn">TRUE</span></span>
+<span id="cb15-3"><a href="#cb15-3" tabindex="-1"></a>structural[<span class="dv">11</span><span class="sc">:</span><span class="dv">30</span>, <span class="dv">1</span><span class="sc">:</span><span class="dv">10</span>] <span class="ot">&lt;-</span> <span class="cn">TRUE</span></span>
+<span id="cb15-4"><a href="#cb15-4" tabindex="-1"></a></span>
+<span id="cb15-5"><a href="#cb15-5" tabindex="-1"></a>friends_split <span class="ot">&lt;-</span> friends</span>
+<span id="cb15-6"><a href="#cb15-6" tabindex="-1"></a>friends_split[structural] <span class="ot">&lt;-</span> <span class="dv">0</span></span>
+<span id="cb15-7"><a href="#cb15-7" tabindex="-1"></a></span>
+<span id="cb15-8"><a href="#cb15-8" tabindex="-1"></a>fit4 <span class="ot">&lt;-</span> <span class="fu">netmice</span>(staff, <span class="fu">list</span>(<span class="at">friends =</span> friends_split), <span class="at">structural =</span> structural,</span>
+<span id="cb15-9"><a href="#cb15-9" tabindex="-1"></a>                <span class="at">m =</span> <span class="dv">3</span>, <span class="at">maxit =</span> <span class="dv">5</span>, <span class="at">seed =</span> <span class="dv">1</span>, <span class="at">printFlag =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb15-10"><a href="#cb15-10" tabindex="-1"></a><span class="co">#&gt; netimpute: inferred attribute types -&gt; age = continuous, female = binary, unit = multinomial, perf = continuous</span></span>
+<span id="cb15-11"><a href="#cb15-11" tabindex="-1"></a><span class="fu">all</span>(<span class="fu">complete_netmice</span>(fit4, <span class="dv">1</span>)<span class="sc">$</span>networks<span class="sc">$</span>friends[structural] <span class="sc">==</span> <span class="dv">0</span>)</span>
+<span id="cb15-12"><a href="#cb15-12" tabindex="-1"></a><span class="co">#&gt; [1] TRUE</span></span></code></pre></div>
+<p><code>net_dependence</code> expresses logical relations
+<em>between</em> networks: <code>necessary</code> means a tie in the
+parent is required for a tie in the child, <code>forbidden</code> that
+two ties are mutually exclusive. Unlike <code>structural</code>, these
+are re-evaluated against the partner network’s current state at every
+visit, so the constrained set adapts as the partner is itself
+imputed.</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" tabindex="-1"></a><span class="co"># advice can only run along friendship ties</span></span>
+<span id="cb16-2"><a href="#cb16-2" tabindex="-1"></a>friends_full <span class="ot">&lt;-</span> <span class="fu">make_net</span>(<span class="fl">0.25</span>)</span>
+<span id="cb16-3"><a href="#cb16-3" tabindex="-1"></a>advice_sub   <span class="ot">&lt;-</span> friends_full <span class="sc">*</span> <span class="fu">matrix</span>(<span class="fu">rbinom</span>(n <span class="sc">*</span> n, <span class="dv">1</span>, <span class="fl">0.5</span>), n, n)</span>
+<span id="cb16-4"><a href="#cb16-4" tabindex="-1"></a></span>
+<span id="cb16-5"><a href="#cb16-5" tabindex="-1"></a>fit5 <span class="ot">&lt;-</span> <span class="fu">netmice</span>(</span>
+<span id="cb16-6"><a href="#cb16-6" tabindex="-1"></a>  staff,</span>
+<span id="cb16-7"><a href="#cb16-7" tabindex="-1"></a>  <span class="fu">list</span>(<span class="at">friends =</span> <span class="fu">punch</span>(friends_full, <span class="dv">50</span>), <span class="at">advice =</span> <span class="fu">punch</span>(advice_sub, <span class="dv">50</span>)),</span>
+<span id="cb16-8"><a href="#cb16-8" tabindex="-1"></a>  <span class="at">net_dependence =</span> <span class="fu">list</span>(<span class="at">necessary =</span> <span class="fu">list</span>(<span class="fu">c</span>(<span class="st">&quot;friends&quot;</span>, <span class="st">&quot;advice&quot;</span>))),</span>
+<span id="cb16-9"><a href="#cb16-9" tabindex="-1"></a>  <span class="at">m =</span> <span class="dv">3</span>, <span class="at">maxit =</span> <span class="dv">5</span>, <span class="at">seed =</span> <span class="dv">1</span>, <span class="at">printFlag =</span> <span class="cn">FALSE</span></span>
+<span id="cb16-10"><a href="#cb16-10" tabindex="-1"></a>)</span>
+<span id="cb16-11"><a href="#cb16-11" tabindex="-1"></a><span class="co">#&gt; netimpute: inferred attribute types -&gt; age = continuous, female = binary, unit = multinomial, perf = continuous</span></span>
+<span id="cb16-12"><a href="#cb16-12" tabindex="-1"></a></span>
+<span id="cb16-13"><a href="#cb16-13" tabindex="-1"></a>out <span class="ot">&lt;-</span> <span class="fu">complete_netmice</span>(fit5, <span class="dv">1</span>)<span class="sc">$</span>networks</span>
+<span id="cb16-14"><a href="#cb16-14" tabindex="-1"></a><span class="fu">all</span>(out<span class="sc">$</span>advice[out<span class="sc">$</span>friends <span class="sc">==</span> <span class="dv">0</span> <span class="sc">&amp;</span> <span class="fu">row</span>(out<span class="sc">$</span>friends) <span class="sc">!=</span> <span class="fu">col</span>(out<span class="sc">$</span>friends)] <span class="sc">==</span> <span class="dv">0</span>)</span>
+<span id="cb16-15"><a href="#cb16-15" tabindex="-1"></a><span class="co">#&gt; [1] TRUE</span></span></code></pre></div>
+</div>
+<div id="supplying-networks-as-an-edgelist" class="section level2">
+<h2>Supplying networks as an edgelist</h2>
+<p>Adjacency matrices are not how most network data arrives.
+<code>networks</code> also accepts a single data.frame edgelist,
+described by <code>edgelist_options</code>.</p>
+<p>Because an edgelist carries node <em>names</em>, they have to be
+resolved against something: <code>id</code> names the column of
+<code>data</code> holding those identifiers, and is required for
+edgelist input. (With matrices <code>id</code> is optional — it matches
+and reorders their dimnames — but supplying it is safer than trusting
+row order.)</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" tabindex="-1"></a>ids <span class="ot">&lt;-</span> <span class="fu">paste0</span>(<span class="st">&quot;e&quot;</span>, <span class="fu">seq_len</span>(n))</span>
+<span id="cb17-2"><a href="#cb17-2" tabindex="-1"></a>staff_id <span class="ot">&lt;-</span> <span class="fu">cbind</span>(<span class="at">pid =</span> ids, staff)</span>
+<span id="cb17-3"><a href="#cb17-3" tabindex="-1"></a></span>
+<span id="cb17-4"><a href="#cb17-4" tabindex="-1"></a><span class="co"># the same `friends` network, written out as edges</span></span>
+<span id="cb17-5"><a href="#cb17-5" tabindex="-1"></a>present <span class="ot">&lt;-</span> <span class="fu">which</span>(friends <span class="sc">==</span> <span class="dv">1</span>, <span class="at">arr.ind =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb17-6"><a href="#cb17-6" tabindex="-1"></a>edges <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="at">from =</span> ids[present[, <span class="dv">1</span>]], <span class="at">to =</span> ids[present[, <span class="dv">2</span>]])</span>
+<span id="cb17-7"><a href="#cb17-7" tabindex="-1"></a><span class="fu">head</span>(edges, <span class="dv">3</span>)</span>
+<span id="cb17-8"><a href="#cb17-8" tabindex="-1"></a><span class="co">#&gt;   from to</span></span>
+<span id="cb17-9"><a href="#cb17-9" tabindex="-1"></a><span class="co">#&gt; 1   e9 e1</span></span>
+<span id="cb17-10"><a href="#cb17-10" tabindex="-1"></a><span class="co">#&gt; 2  e11 e1</span></span>
+<span id="cb17-11"><a href="#cb17-11" tabindex="-1"></a><span class="co">#&gt; 3  e12 e1</span></span>
+<span id="cb17-12"><a href="#cb17-12" tabindex="-1"></a></span>
+<span id="cb17-13"><a href="#cb17-13" tabindex="-1"></a>fit_el <span class="ot">&lt;-</span> <span class="fu">netmice</span>(staff_id, <span class="at">networks =</span> edges, <span class="at">id =</span> <span class="st">&quot;pid&quot;</span>,</span>
+<span id="cb17-14"><a href="#cb17-14" tabindex="-1"></a>                  <span class="at">m =</span> <span class="dv">2</span>, <span class="at">maxit =</span> <span class="dv">5</span>, <span class="at">seed =</span> <span class="dv">1</span>, <span class="at">printFlag =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb17-15"><a href="#cb17-15" tabindex="-1"></a><span class="co">#&gt; netimpute: inferred attribute types -&gt; age = continuous, female = binary, unit = multinomial, perf = continuous</span></span>
+<span id="cb17-16"><a href="#cb17-16" tabindex="-1"></a><span class="fu">dim</span>(fit_el<span class="sc">$</span>networks<span class="sc">$</span>net1)</span>
+<span id="cb17-17"><a href="#cb17-17" tabindex="-1"></a><span class="co">#&gt; [1] 30 30</span></span></code></pre></div>
+<p>Note what an edgelist can and cannot say. It records which ties
+<em>exist</em>; every other cell is a zero by omission. So the round
+trip above is not lossless — <code>friends</code> had 60 cells marked
+<code>NA</code>, and those became zeros, because nothing in an edgelist
+distinguishes “no tie” from “not asked”.</p>
+<p>That is what <code>missing</code> is for: it names the nodes whose
+ties are unknown, so their unlisted cells become <code>NA</code> instead
+of 0.</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" tabindex="-1"></a>fit_el2 <span class="ot">&lt;-</span> <span class="fu">netmice</span>(staff_id, <span class="at">networks =</span> edges, <span class="at">id =</span> <span class="st">&quot;pid&quot;</span>,</span>
+<span id="cb18-2"><a href="#cb18-2" tabindex="-1"></a>                   <span class="at">edgelist_options =</span> <span class="fu">list</span>(<span class="at">missing =</span> ids[<span class="dv">1</span><span class="sc">:</span><span class="dv">3</span>]),</span>
+<span id="cb18-3"><a href="#cb18-3" tabindex="-1"></a>                   <span class="at">m =</span> <span class="dv">2</span>, <span class="at">maxit =</span> <span class="dv">5</span>, <span class="at">seed =</span> <span class="dv">1</span>, <span class="at">printFlag =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb18-4"><a href="#cb18-4" tabindex="-1"></a><span class="co">#&gt; Warning: netimpute: in network &#39;net1&#39;, outgoing ties listed for e1, e2, e3, yet</span></span>
+<span id="cb18-5"><a href="#cb18-5" tabindex="-1"></a><span class="co">#&gt; those nodes are marked missing in that same direction. An edgelist can only say</span></span>
+<span id="cb18-6"><a href="#cb18-6" tabindex="-1"></a><span class="co">#&gt; which ties EXIST, so netimpute treats the listed edges as observed and every</span></span>
+<span id="cb18-7"><a href="#cb18-7" tabindex="-1"></a><span class="co">#&gt; other cell in those rows/columns as missing - the zeros are not observed zeros.</span></span>
+<span id="cb18-8"><a href="#cb18-8" tabindex="-1"></a><span class="co">#&gt; If some of those zeros are genuinely observed, supply the data as</span></span>
+<span id="cb18-9"><a href="#cb18-9" tabindex="-1"></a><span class="co">#&gt; `edgelist_format = &#39;wide&#39;` or as matrices instead.</span></span>
+<span id="cb18-10"><a href="#cb18-10" tabindex="-1"></a><span class="co">#&gt; netimpute: inferred attribute types -&gt; age = continuous, female = binary, unit = multinomial, perf = continuous</span></span>
+<span id="cb18-11"><a href="#cb18-11" tabindex="-1"></a><span class="fu">sum</span>(<span class="fu">is.na</span>(fit_el2<span class="sc">$</span>networks<span class="sc">$</span>net1))</span>
+<span id="cb18-12"><a href="#cb18-12" tabindex="-1"></a><span class="co">#&gt; [1] 73</span></span></code></pre></div>
+<p>By default <code>missing</code> means <em>outgoing</em> ties — the
+actor-non-response case, where somebody did not report but others could
+still nominate them. Pass a list with <code>out</code> and
+<code>in</code> to say otherwise. netimpute warns only when the
+direction genuinely conflicts: a node listed as a <em>sender</em> while
+marked <code>missing$out</code>. Appearing as a <em>receiver</em> while
+marked <code>missing$out</code> is normal and stays silent.</p>
+<div id="several-networks-from-one-edgelist" class="section level3">
+<h3>Several networks from one edgelist</h3>
+<p><code>edgelist_split</code> turns one edgelist into many networks. In
+<code>&quot;long&quot;</code> format it splits on the interaction of the named
+columns, so <code>c(&quot;wave&quot;, &quot;question&quot;)</code> over three waves and two
+questions yields six networks, named <code>wave_1_question_a</code> and
+so on.</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb19-1"><a href="#cb19-1" tabindex="-1"></a>edges2 <span class="ot">&lt;-</span> <span class="fu">rbind</span>(<span class="fu">cbind</span>(edges, <span class="at">wave =</span> <span class="dv">1</span>), <span class="fu">cbind</span>(edges[<span class="dv">1</span><span class="sc">:</span><span class="dv">40</span>, ], <span class="at">wave =</span> <span class="dv">2</span>))</span>
+<span id="cb19-2"><a href="#cb19-2" tabindex="-1"></a>fit_w <span class="ot">&lt;-</span> <span class="fu">netmice</span>(staff_id, <span class="at">networks =</span> edges2, <span class="at">id =</span> <span class="st">&quot;pid&quot;</span>,</span>
+<span id="cb19-3"><a href="#cb19-3" tabindex="-1"></a>                 <span class="at">edgelist_options =</span> <span class="fu">list</span>(<span class="at">edgelist_split =</span> <span class="st">&quot;wave&quot;</span>),</span>
+<span id="cb19-4"><a href="#cb19-4" tabindex="-1"></a>                 <span class="at">m =</span> <span class="dv">2</span>, <span class="at">maxit =</span> <span class="dv">5</span>, <span class="at">seed =</span> <span class="dv">1</span>, <span class="at">printFlag =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb19-5"><a href="#cb19-5" tabindex="-1"></a><span class="co">#&gt; netimpute: inferred attribute types -&gt; age = continuous, female = binary, unit = multinomial, perf = continuous</span></span>
+<span id="cb19-6"><a href="#cb19-6" tabindex="-1"></a><span class="fu">names</span>(fit_w<span class="sc">$</span>networks)</span>
+<span id="cb19-7"><a href="#cb19-7" tabindex="-1"></a><span class="co">#&gt; [1] &quot;wave_1&quot; &quot;wave_2&quot;</span></span></code></pre></div>
+<p>In <code>&quot;wide&quot;</code> format each column named in
+<code>edgelist_split</code> is its own network, holding that tie’s value
+or <code>NA</code> — which is how you express partial observation that
+the long format cannot.</p>
+<p><code>nodelist</code> supplies the roster, which matters because
+isolates and wholly missing people never appear in an edgelist at all.
+It takes a column of <code>data</code>, a vector, or a named list keyed
+per network (or per split value, whose node sets are then intersected).
+A node off a network’s roster is marked <strong>structurally
+absent</strong> there: fixed at 0, never imputed. A tie whose endpoint
+is off the roster is an error, since it means the roster is wrong.</p>
+<p>Any node that appears in the edgelist, <code>nodelist</code> or
+<code>missing</code> but not in <code>data</code> is added as a new row
+with all attributes missing, and <code>netmice()</code> warns, listing
+separately the nodes added with connections, as isolates, and entirely
+missing. Those are the rows whose imputations carry the most
+uncertainty, since nothing about them was observed.</p>
+<p>Finally, <code>structural</code> accepts an edgelist too, listing the
+cells fixed at 0. It reads the same <code>edgelist_options</code>,
+except <code>missing</code>, which is ignored — a structural constraint
+is always known.</p>
+</div>
+</div>
+<div id="directed-and-undirected-networks" class="section level2">
+<h2>Directed and undirected networks</h2>
+<p>A network counts as undirected when the matrix you supply is
+symmetric in its values <strong>and</strong> in its pattern of missing
+cells — exactly the case in which cells <span class="math inline">\((i,j)\)</span> and <span class="math inline">\((j,i)\)</span> record one tie rather than two.
+That classification is made once, from the data you pass in, and an
+undirected network is imputed one tie at a time, so it comes back
+undirected.</p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" tabindex="-1"></a>und <span class="ot">&lt;-</span> <span class="fu">make_net</span>(<span class="fl">0.25</span>)</span>
+<span id="cb20-2"><a href="#cb20-2" tabindex="-1"></a>und[<span class="fu">lower.tri</span>(und)] <span class="ot">&lt;-</span> <span class="fu">t</span>(und)[<span class="fu">lower.tri</span>(und)]</span>
+<span id="cb20-3"><a href="#cb20-3" tabindex="-1"></a>und[<span class="fu">sample</span>(<span class="fu">which</span>(<span class="fu">upper.tri</span>(und)), <span class="dv">40</span>)] <span class="ot">&lt;-</span> <span class="cn">NA</span></span>
+<span id="cb20-4"><a href="#cb20-4" tabindex="-1"></a>und[<span class="fu">lower.tri</span>(und)] <span class="ot">&lt;-</span> <span class="fu">t</span>(und)[<span class="fu">lower.tri</span>(und)]</span>
+<span id="cb20-5"><a href="#cb20-5" tabindex="-1"></a></span>
+<span id="cb20-6"><a href="#cb20-6" tabindex="-1"></a>fit6 <span class="ot">&lt;-</span> <span class="fu">netmice</span>(staff, <span class="fu">list</span>(<span class="at">contact =</span> und), <span class="at">m =</span> <span class="dv">3</span>, <span class="at">maxit =</span> <span class="dv">5</span>, <span class="at">seed =</span> <span class="dv">1</span>,</span>
+<span id="cb20-7"><a href="#cb20-7" tabindex="-1"></a>                <span class="at">printFlag =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb20-8"><a href="#cb20-8" tabindex="-1"></a><span class="co">#&gt; netimpute: inferred attribute types -&gt; age = continuous, female = binary, unit = multinomial, perf = continuous</span></span>
+<span id="cb20-9"><a href="#cb20-9" tabindex="-1"></a><span class="fu">isSymmetric</span>(<span class="fu">unname</span>(<span class="fu">complete_netmice</span>(fit6, <span class="dv">1</span>)<span class="sc">$</span>networks<span class="sc">$</span>contact))</span>
+<span id="cb20-10"><a href="#cb20-10" tabindex="-1"></a><span class="co">#&gt; [1] TRUE</span></span></code></pre></div>
+<p>The classification cannot be recovered after the fact: a directed
+network whose asymmetry happens to sit entirely in its missing cells
+becomes symmetric the moment those are filled. Supply the matrix with
+its <code>NA</code>s intact and the distinction is preserved.</p>
+</div>
+<div id="where-to-go-next" class="section level2">
+<h2>Where to go next</h2>
+<ul>
+<li><code>?netmice</code> — the full argument reference, plus complete
+lists of dyad-level term names and implemented network measures.</li>
+<li><code>?netquickpred</code> — how predictors are screened, and the
+tuning arguments.</li>
+<li><code>?dyad_regression</code> — the tie model on its own, usable as
+a standalone MR-QAP-style regression.</li>
+<li><code>?net_measures</code>, <code>?net_predictors</code> — the
+node-level measures.</li>
+</ul>
+<p>The methodology is described in Krause (2026), <a href="https://doi.org/10.48550/arXiv.2608.05895">arXiv:2608.05895</a>.</p>
+</div>
+
+
+
+<!-- code folding -->
+
+
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+  (function () {
+    var script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src  = "https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML";
+    document.getElementsByTagName("head")[0].appendChild(script);
+  })();
+</script>
+
+</body>
+</html>
