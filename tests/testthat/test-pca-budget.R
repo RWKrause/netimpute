@@ -245,3 +245,91 @@ test_that("netmice: PCA = list(n = 0) runs and fills every missing value", {
   expect_equal(fit2$PCA_networks$ratio, 10)
   expect_false(anyNA(complete_netmice(fit2, 1)$data$age))
 })
+
+# Since 1.2.0 the two caps count different things: `ratio` the total width,
+# protected columns included; `n` the principal components alone. Folding `n`
+# into the total meant an attribute model with six isolate flags got exactly
+# one component for every n up to six.
+
+test_that(".pca_total_budget: ratio only, floored at one", {
+  p <- function(...) .validate_pca(list(...))
+  expect_null(.pca_total_budget(p(n = 5), 1000))
+  expect_equal(.pca_total_budget(p(ratio = 10), 130), 13L)
+  # n plays no part in the total width
+  expect_equal(.pca_total_budget(p(n = 2, ratio = 10), 130), 13L)
+  expect_equal(.pca_total_budget(p(n = 0, ratio = 10), 130), 13L)
+  expect_equal(.pca_total_budget(p(ratio = 10), 3), 1L)
+})
+
+cap_fixture <- function() {
+  set.seed(11)
+  x <- matrix(rnorm(200 * 14), 200, 14,
+              dimnames = list(NULL, c(paste0("iso", 1:4), paste0("c", 1:10))))
+  list(x = x, keep = paste0("iso", 1:4))
+}
+
+test_that(".clean_predictor_matrix: max_comp counts components, not protected columns", {
+  fx <- cap_fixture()
+  for (k in 1:5) {
+    out <- .clean_predictor_matrix(fx$x, keep_raw = fx$keep, max_comp = k)
+    expect_identical(ncol(out), 4L + k)
+    expect_true(all(fx$keep %in% colnames(out)))
+  }
+  # a remainder already within the cap is kept raw, not rotated
+  out <- .clean_predictor_matrix(fx$x, keep_raw = fx$keep, max_comp = 10)
+  expect_identical(colnames(out), colnames(fx$x))
+  expect_null(attr(out, "budget_overflow"))
+})
+
+test_that(".clean_predictor_matrix: the tighter of max_cols and max_comp wins", {
+  fx <- cap_fixture()
+  # total 7 leaves 3 after the 4 protected; n = 5 does not bind
+  out <- .clean_predictor_matrix(fx$x, max_cols = 7, keep_raw = fx$keep,
+                                 max_comp = 5)
+  expect_identical(ncol(out), 7L)
+  # total 12 leaves 8; n = 2 binds
+  out <- .clean_predictor_matrix(fx$x, max_cols = 12, keep_raw = fx$keep,
+                                 max_comp = 2)
+  expect_identical(ncol(out), 6L)
+  # a protected block that overflows the total still gets the one component,
+  # and is still reported
+  out <- .clean_predictor_matrix(fx$x, max_cols = 3, keep_raw = fx$keep,
+                                 max_comp = 5)
+  expect_identical(ncol(out), 5L)
+  expect_equal(attr(out, "budget_overflow"), list(kept = 4L, budget = 3))
+})
+
+test_that(".clean_predictor_matrix: max_comp = 0 keeps the protected columns only", {
+  fx <- cap_fixture()
+  out <- .clean_predictor_matrix(fx$x, max_cols = 50, keep_raw = fx$keep,
+                                 max_comp = 0)
+  expect_identical(colnames(out), fx$keep)
+  expect_null(attr(out, "budget_overflow"))
+})
+
+test_that("netmice: PCA$n reaches the models as a component cap, ratio as the total", {
+  fx <- make_budget_fixture()
+  seen <- list()
+  real <- .clean_predictor_matrix
+  local_mocked_bindings(.clean_predictor_matrix = function(x, max_cols = NULL,
+                                                           ry = NULL,
+                                                           keep_raw = NULL,
+                                                           max_comp = NULL) {
+    seen[[length(seen) + 1L]] <<- list(max_cols = max_cols,
+                                       max_comp = max_comp)
+    real(x, max_cols, ry, keep_raw, max_comp)
+  })
+  suppressWarnings(netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 1,
+                           PCA = list(n = 3), printFlag = FALSE))
+  budgeted <- Filter(function(s) !is.null(s$max_comp), seen)
+  expect_gt(length(budgeted), 0L)
+  expect_true(all(vapply(budgeted, function(s) s$max_comp == 3L, logical(1))))
+  # n alone sets no total-width cap
+  expect_true(all(vapply(budgeted, function(s) is.null(s$max_cols), logical(1))))
+
+  seen <- list()
+  suppressWarnings(netmice(fx$attrs, fx$nets, m = 1, maxit = 1, seed = 1,
+                           PCA = list(ratio = 10), printFlag = FALSE))
+  expect_true(all(vapply(seen, function(s) is.null(s$max_comp), logical(1))))
+  expect_true(any(vapply(seen, function(s) !is.null(s$max_cols), logical(1))))
+})

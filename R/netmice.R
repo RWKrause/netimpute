@@ -892,18 +892,23 @@ net_diagnostics <- function(mat, directed = NULL) {
 #' extra predictors, and the events-per-variable rule `.pca_denom()` documents
 #' (Peduzzi et al. 1996; Harrell 2015) was silently missed by that margin,
 #' worst on the sparsest networks where the budget is smallest. The protected
-#' columns now consume the budget first.
+#' columns now consume the budget first. It comes from `PCA$ratio`.
 #'
-#' One component always survives: squeezing the remainder to zero would throw
-#' away every attribute and cross-network signal the moment the protected
-#' block alone filled the budget, which is exactly the sparse-network case
-#' that needs the most help. When the protected block exceeds the
-#' budget outright is exceeded outright the result carries a `"budget_overflow"`
-#' attribute so the caller -
-#' which knows the target's name - can report it once per call.
+#' `max_comp` caps the number of principal components the collapsible
+#' remainder may become, independently of the protected block: it is
+#' `PCA$n`. A remainder already no wider than the cap is kept as it is.
+#' `max_comp = 0` keeps the protected columns and nothing else.
+#'
+#' One component always survives a squeezed `max_cols`: squeezing the
+#' remainder to zero would throw away every attribute and cross-network signal
+#' the moment the protected block alone filled the budget, which is exactly
+#' the sparse-network case that needs the most help. When the protected block
+#' exceeds `max_cols` outright the result carries a `"budget_overflow"`
+#' attribute so the caller - which knows the target's name - can report it
+#' once per call.
 #' @noRd
 .clean_predictor_matrix <- function(x, max_cols = NULL, ry = NULL,
-                                    keep_raw = NULL) {
+                                    keep_raw = NULL, max_comp = NULL) {
   x <- as.matrix(x)
   # an empty selection (predictor_selection with no survivors) is legal:
   # .impute_univariate() falls back to an intercept-only model
@@ -924,35 +929,36 @@ net_diagnostics <- function(mat, directed = NULL) {
   }
   x <- keep_varying(x)
 
+  keep_idx <- if (is.null(keep_raw) || is.null(colnames(x))) {
+    rep(FALSE, ncol(x))
+  } else {
+    colnames(x) %in% keep_raw
+  }
+
   # an explicit zero budget (PCA$n = 0): keep the protected columns and
   # nothing else - no components, and no overflow notice, since dropping the
-  # collapsible remainder is exactly what was asked for
-  if (!is.null(max_cols) && max_cols == 0) {
-    keep_idx <- if (is.null(keep_raw) || is.null(colnames(x))) {
-      rep(FALSE, ncol(x))
-    } else {
-      colnames(x) %in% keep_raw
-    }
+  # collapsible remainder is exactly what was asked for. `max_cols = 0` is
+  # the pre-1.2.0 spelling of the same request and still honoured.
+  if ((!is.null(max_comp) && max_comp == 0) ||
+      (!is.null(max_cols) && max_cols == 0)) {
     return(x[, keep_idx, drop = FALSE])
   }
 
-  if (!is.null(max_cols) && max_cols >= 1 && ncol(x) > max_cols) {
-    keep_idx <- if (is.null(keep_raw) || is.null(colnames(x))) {
-      rep(FALSE, ncol(x))
-    } else {
-      colnames(x) %in% keep_raw
-    }
+  total_hit <- !is.null(max_cols) && max_cols >= 1 && ncol(x) > max_cols
+  comp_hit  <- !is.null(max_comp) && sum(!keep_idx) > max_comp
+  if (total_hit || comp_hit) {
     kept <- x[, keep_idx, drop = FALSE]
     rest <- x[, !keep_idx, drop = FALSE]
-    # the budget is the TOTAL width: protected columns spend it first, and
-    # whatever is left is what the remainder may collapse to - but never
-    # fewer than one component (see the note above).
-    rest_cap <- max(1L, max_cols - ncol(kept))
+    # the total budget: protected columns spend it first, and whatever is
+    # left is what the remainder may collapse to - but never fewer than one
+    # component (see the note above). The component cap applies on top.
+    rest_cap <- if (is.null(max_cols)) Inf else max(1L, max_cols - ncol(kept))
+    if (!is.null(max_comp)) rest_cap <- min(rest_cap, max_comp)
     # strictly greater: a protected block that exactly fills the budget is
     # working as intended, and the one guaranteed component is a deliberate
     # small overshoot. Only a block that cannot fit at all is worth a warning,
     # or every small dataset (where the budget is 1-4 columns) would raise one.
-    overflow <- if (ncol(kept) > max_cols) {
+    overflow <- if (!is.null(max_cols) && ncol(kept) > max_cols) {
       list(kept = ncol(kept), budget = max_cols)
     } else {
       NULL
@@ -1232,9 +1238,15 @@ net_diagnostics <- function(mat, directed = NULL) {
         # its rarer category, anything else by its observed row count.
         # PCA_attr is NULL when `PCA_attributes = "none"` asked for no
         # collapse at all; .clean_predictor_matrix() reads that as "no cap".
-        v_budget <- if (is.null(PCA_attr)) NULL else .pca_budget(
-          PCA_attr, .pca_denom(cur_data[[v]], ry,
-                               binary = identical(attr_types[[v]], "binary")))
+        # `ratio` bounds the total width (v_total), `n` the components alone
+        # (v_comp); v_budget, the smaller, is only used for the notice below.
+        v_denom <- .pca_denom(cur_data[[v]], ry,
+                              binary = identical(attr_types[[v]], "binary"))
+        v_budget <- if (is.null(PCA_attr)) NULL else
+          .pca_budget(PCA_attr, v_denom)
+        v_total <- if (is.null(PCA_attr)) NULL else
+          .pca_total_budget(PCA_attr, v_denom)
+        v_comp <- if (is.null(PCA_attr)) NULL else PCA_attr$n
         # `models` extras are the user's congeniality requirement, so they are
         # never collapsed - but they were also never *counted* against the
         # budget, a second route past the events-per-variable rule alongside
@@ -1246,17 +1258,18 @@ net_diagnostics <- function(mat, directed = NULL) {
         } else {
           NULL
         }
-        # the one-component floor applies to a budget the `models` extras
-        # squeezed, not to an explicit request for none (PCA$n = 0)
-        v_budget_auto <- if (is.null(v_budget)) NULL else if (v_budget == 0L)
-          0L else max(1L, v_budget - if (is.null(extra)) 0L else ncol(extra))
+        # the extras spend the total budget; the one-component floor applies
+        # to what they leave. They never count against `n`, which caps
+        # components only.
+        v_total_auto <- if (is.null(v_total)) NULL else
+          max(1L, v_total - if (is.null(extra)) 0L else ncol(extra))
 
         if (is.null(sel)) {
           # net_feats_df is NULL when every network was dropped via `targets`
           auto_x <- .clean_predictor_matrix(
             cbind(.prep_pca_matrix(other_data),
                   if (!is.null(net_feats_df)) .prep_pca_matrix(net_feats_df)),
-            max_cols = v_budget_auto,
+            max_cols = v_total_auto, max_comp = v_comp,
             ry = ry,
             keep_raw = iso_feats
           )
@@ -1285,7 +1298,8 @@ net_diagnostics <- function(mat, directed = NULL) {
               target = v, n_in = ncol(raw_x), budget = v_budget)
           }
           auto_x <- .clean_predictor_matrix(raw_x,
-                                            max_cols = v_budget_auto,
+                                            max_cols = v_total_auto,
+                                            max_comp = v_comp,
                                             ry = ry,
                                             keep_raw = iso_feats)
         }
@@ -1364,9 +1378,17 @@ net_diagnostics <- function(mat, directed = NULL) {
         # at all; .clean_predictor_matrix() reads that as "no cap", and the
         # other-network PCA inside .build_dyad_data() is capped only by how
         # many degree terms there are.
-        tie_budget <- if (is.null(PCA_net)) NULL else .pca_budget(
-          PCA_net, .pca_denom(cur_mats[[tgt]][obs_mask], NULL,
-                              binary = net_binary[[tgt]]))
+        # as for attributes: `ratio` bounds the total width (tie_total), `n`
+        # the components (tie_comp); tie_budget, the smaller, sizes the plain
+        # other-network PCA inside .build_dyad_data(), which has no protected
+        # block of its own.
+        tie_denom <- .pca_denom(cur_mats[[tgt]][obs_mask], NULL,
+                                binary = net_binary[[tgt]])
+        tie_budget <- if (is.null(PCA_net)) NULL else
+          .pca_budget(PCA_net, tie_denom)
+        tie_total <- if (is.null(PCA_net)) NULL else
+          .pca_total_budget(PCA_net, tie_denom)
+        tie_comp <- if (is.null(PCA_net)) NULL else PCA_net$n
         built <- .build_dyad_data(cur_mats,
                                   cur_data,
                                   target_idx = k,
@@ -1437,15 +1459,16 @@ net_diagnostics <- function(mat, directed = NULL) {
         } else {
           NULL
         }
-        auto_budget <- if (is.null(tie_budget)) NULL else if (tie_budget == 0L)
-          0L else max(1L, tie_budget - if (is.null(extra)) 0L else ncol(extra))
+        auto_budget <- if (is.null(tie_total)) NULL else
+          max(1L, tie_total - if (is.null(extra)) 0L else ncol(extra))
         auto_x <- if (is.null(sel)) {
           .clean_predictor_matrix(d[setdiff(names(d), drop_cols)],
                                   max_cols = auto_budget, ry = ry,
-                                  keep_raw = keep_raw)
+                                  keep_raw = keep_raw, max_comp = tie_comp)
         } else {
           .clean_predictor_matrix(d[sel_cols], max_cols = auto_budget,
-                                  ry = ry, keep_raw = keep_raw)
+                                  ry = ry, keep_raw = keep_raw,
+                                  max_comp = tie_comp)
         }
         # the protected dyad terms are never collapsed either, so with many
         # networks they can fill a sparse target's whole budget on their own
@@ -1891,9 +1914,9 @@ net_diagnostics <- function(mat, directed = NULL) {
 #' @param PCA How many predictors any one imputation model may carry - the
 #'   single dimensionality safeguard, replacing the former `n_components`
 #'   argument and the internal 3:1 cap. A list with either or both of:
-#'   `n`, a fixed maximum number of predictors/components; and `ratio`, the
-#'   required number of observations per predictor. When both are given the
-#'   smaller budget wins. The budget is never below 1.
+#'   `n`, the maximum number of principal components; and `ratio`, the
+#'   required number of observations per predictor. When both are given both
+#'   apply, and whichever binds first wins.
 #'
 #'   For a **binary** target - a tie model, or a binary attribute - `ratio`
 #'   counts *events*, i.e. the rarer of the two outcomes among the observed
@@ -1904,13 +1927,17 @@ net_diagnostics <- function(mat, directed = NULL) {
 #'   observed row count. The default `ratio = 10` is the conventional
 #'   events-per-variable floor (Peduzzi et al. 1996; Harrell 2015).
 #'
-#'   The budget counts **every** predictor, including the protected ones that
-#'   are never collapsed (a network target's endogenous and cross-network dyad
-#'   terms, an attribute model's isolate flags, and any `models` terms). What
-#'   is left over is the room for principal components, with a floor of one
-#'   component. `n = 0` is the one way below that floor: it collapses nothing
-#'   and keeps only the protected predictors - an intercept-only model for an
-#'   attribute with none.
+#'   The two caps count different things. The `ratio` budget counts **every**
+#'   predictor, including the protected ones that are never collapsed (a
+#'   network target's endogenous and cross-network dyad terms, an attribute
+#'   model's isolate flags, and any `models` terms); what is left over is the
+#'   room for principal components, with a floor of one component. `n` counts
+#'   the **components only**: the protected predictors come on top of it, so
+#'   `n = 3` means three components however many protected columns the model
+#'   has (fewer if the `ratio` budget is tighter, or if fewer collapsible
+#'   predictors exist - those are then kept as they are). `n = 0` collapses
+#'   nothing and keeps only the protected predictors - an intercept-only model
+#'   for an attribute with none.
 #' @param PCA_attributes Optional separate budget for the **attribute**
 #'   imputation models. `NULL` (default) inherits `PCA`, reproducing earlier
 #'   behaviour exactly. `"none"` imposes no budget on attribute models, so
