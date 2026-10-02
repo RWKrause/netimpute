@@ -1,3 +1,26 @@
+# netimpute 1.2.0
+
+## Breaking changes
+
+* **`PCA$n` now caps the number of principal components, not the total
+  predictor count.** In 1.1.0 `n` was folded into the same total budget as
+  `ratio`, so the protected columns (an attribute model's isolate flags, a
+  network target's endogenous and cross-network dyad terms, `models` terms)
+  spent it first. With eight networks an attribute model keeps five or six
+  isolate flags, so every `n` up to that many produced exactly one component -
+  `PCA = list(n = 1)`, `list(n = 3)` and `list(n = 5)` gave identical
+  imputations, and all of them overshot the width they asked for.
+
+  The two caps now count different things. `ratio` is still the
+  events-per-variable rule on the **total** width, protected columns included,
+  with the one-component floor. `n` caps the **components alone**, on top of
+  the protected columns. When both are set, whichever binds first wins.
+  `n = 0` still means "no components, protected columns only".
+
+  Results change for any call that sets `PCA$n` (or `PCA_attributes$n` /
+  `PCA_networks$n`) on a model with protected columns. Calls that set only
+  `ratio`, including the default, are unchanged.
+
 # netimpute 1.1.0
 
 Tie imputation was over-imputing: `netmice()` 1.0.0 filled missing cells at

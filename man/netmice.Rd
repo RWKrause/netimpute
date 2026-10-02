@@ -165,9 +165,9 @@ Details) collapses the remaining predictors to components.}
 \item{PCA}{How many predictors any one imputation model may carry - the
   single dimensionality safeguard, replacing the former `n_components`
   argument and the internal 3:1 cap. A list with either or both of:
-  `n`, a fixed maximum number of predictors/components; and `ratio`, the
-  required number of observations per predictor. When both are given the
-  smaller budget wins. The budget is never below 1.
+  `n`, the maximum number of principal components; and `ratio`, the
+  required number of observations per predictor. When both are given both
+  apply, and whichever binds first wins.
 
   For a **binary** target - a tie model, or a binary attribute - `ratio`
   counts *events*, i.e. the rarer of the two outcomes among the observed
@@ -178,13 +178,17 @@ Details) collapses the remaining predictors to components.}
   observed row count. The default `ratio = 10` is the conventional
   events-per-variable floor (Peduzzi et al. 1996; Harrell 2015).
 
-  The budget counts **every** predictor, including the protected ones that
-  are never collapsed (a network target's endogenous and cross-network dyad
-  terms, an attribute model's isolate flags, and any `models` terms). What
-  is left over is the room for principal components, with a floor of one
-  component. `n = 0` is the one way below that floor: it collapses nothing
-  and keeps only the protected predictors - an intercept-only model for an
-  attribute with none.}
+  The two caps count different things. The `ratio` budget counts **every**
+  predictor, including the protected ones that are never collapsed (a
+  network target's endogenous and cross-network dyad terms, an attribute
+  model's isolate flags, and any `models` terms); what is left over is the
+  room for principal components, with a floor of one component. `n` counts
+  the **components only**: the protected predictors come on top of it, so
+  `n = 3` means three components however many protected columns the model
+  has (fewer if the `ratio` budget is tighter, or if fewer collapsible
+  predictors exist - those are then kept as they are). `n = 0` collapses
+  nothing and keeps only the protected predictors - an intercept-only model
+  for an attribute with none.}
 
 \item{PCA_attributes}{Optional separate budget for the **attribute**
   imputation models. `NULL` (default) inherits `PCA`, reproducing earlier

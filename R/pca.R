@@ -3,10 +3,11 @@
 
 #' Validate and normalize a `PCA` specification
 #'
-#' @param PCA A list with `n` (a fixed maximum number of components) and/or
-#'   `ratio` (rows-or-events per predictor). At least one must be set. `n = 0`
+#' @param PCA A list with `n` (the most principal components a model may
+#'   carry, on top of its protected columns) and/or `ratio` (rows-or-events per
+#'   predictor, counting every predictor). At least one must be set. `n = 0`
 #'   is allowed and means "no components at all": only the protected columns
-#'   survive (see `.pca_budget()`).
+#'   survive (see `.pca_total_budget()`).
 #' @return A list with `n` (integer or `NULL`) and `ratio` (numeric or `NULL`).
 #' @noRd
 .validate_pca <- function(PCA) {
@@ -136,16 +137,19 @@
   length(obs)
 }
 
-#' Predictor budget for one model
+#' Component count for a PCA with no protected columns
+#'
+#' The smaller of the two caps, for the places that run a plain PCA and have
+#' no protected block to account for (`net_predictors()`, the other-network
+#' degree PCA inside `.build_dyad_data()`). Where a model does carry protected
+#' columns, the two caps mean different things and are applied separately:
+#' see `.pca_total_budget()`.
 #'
 #' @param PCA A validated `PCA` list.
 #' @param denom Effective sample size from \code{.pca_denom()}.
-#' @return A non-negative integer: the most predictors this model may carry.
-#'   A budget derived from `ratio` is never 0 - on a tiny sample that would
-#'   silently empty every design matrix - so it floors at 1. The one way to get
-#'   0 is to ask for it explicitly with `n = 0`, which keeps only the protected
-#'   columns (a network target's endogenous and cross-network dyad terms, an
-#'   attribute model's isolate flags and `models` terms) and collapses nothing.
+#' @return A non-negative integer. A budget derived from `ratio` is never 0 -
+#'   on a tiny sample that would silently empty every design matrix - so it
+#'   floors at 1. The one way to get 0 is to ask for it with `n = 0`.
 #' @noRd
 .pca_budget <- function(PCA, denom) {
   if (!is.null(PCA$n) && PCA$n == 0L) return(0L)
@@ -153,6 +157,29 @@
   if (!is.null(PCA$n)) caps <- c(caps, PCA$n)
   if (!is.null(PCA$ratio)) caps <- c(caps, as.integer(floor(denom / PCA$ratio)))
   max(1L, if (length(caps)) min(caps) else 1L)
+}
+
+#' Total-width budget for one imputation model
+#'
+#' The two `PCA` caps answer different questions. `ratio` is the
+#' events-per-variable rule, so it bounds the model's **total** width and the
+#' protected columns (a network target's endogenous and cross-network dyad
+#' terms, an attribute model's isolate flags, `models` terms) spend it first.
+#' `n` bounds the number of **principal components** only, on top of whatever
+#' is protected: until 1.2.0 it was folded into the total budget as well, so
+#' an attribute model with six isolate flags got exactly one component for
+#' every `n` up to six - `n` was not the component count its name promised.
+#' The component cap is `PCA$n` itself, passed to `.clean_predictor_matrix()`
+#' as `max_comp`.
+#'
+#' @param PCA A validated `PCA` list.
+#' @param denom Effective sample size from \code{.pca_denom()}.
+#' @return `NULL` when `ratio` is unset (no total cap), otherwise
+#'   `floor(denom / ratio)`, floored at 1.
+#' @noRd
+.pca_total_budget <- function(PCA, denom) {
+  if (is.null(PCA$ratio)) return(NULL)
+  max(1L, as.integer(floor(denom / PCA$ratio)))
 }
 
 #' Validate and normalize a `net_ridge` specification
